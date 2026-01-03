@@ -59,7 +59,7 @@ struct CompressorPipeline
         detectorSplit.process(buffer);
 
         // 3-7. Detector Core + Hybrid Envelopes + Weighting (represented)
-                detectorCore.process(buffer);
+        detectorCore.process(buffer);
 
         // Wire detector outputs into hybrid engine (Phase 2 plumbing only)
         hybridEnvelopeEngine.setDetectorLinear(detectorCore.getDetectorLinear());
@@ -67,20 +67,39 @@ struct CompressorPipeline
         hybridEnvelopeEngine.setReleaseNormalized(detectorCore.getReleaseNormalized());
         hybridEnvelopeEngine.setCrestNormalized(detectorCore.getCrestNormalized());
         hybridEnvelopeEngine.process(buffer);
-// 8. Gain Computer + soft knee (represented)
+
+        // Wire hybrid detector/envelope into gain computer (Phase 3 plumbing only)
+        gainComputer.setDetectorLinear(detectorCore.getDetectorLinear());
+        gainComputer.setHybridEnvLinear(hybridEnvelopeEngine.getHybridEnv());
+
+        // 8. Gain Computer + soft knee (represented)
         gainComputer.process(buffer);
 
-        // 9. Character Engine (represented)
-        characterEngine.process(buffer);
+
+        // 9.5 Stereo Link control (Phase 3 plumbing only)
+        stereoLink.setGainReductionDbIn(gainComputer.getGainReductionDb());
+        stereoLink.setGainReductionLinearIn(gainComputer.getGainReductionLinear());
+        // Placeholder link amount until parameter wiring (Phase 5)
+        stereoLink.setLinkAmountNormalized(0.5);
+        // Placeholder correlation until measurement / dynamic law wiring (Phase 5)
+        stereoLink.setCorrelation01(1.0);
+        stereoLink.process(buffer);
+
 
         // 10. Gain Reduction application (represented)
+        // Wire gain computer outputs into gain reduction stage (Phase 3 plumbing only)
+        gainReductionStage.setGainReductionDb(stereoLink.getGainReductionDbOut());
+        gainReductionStage.setGainReductionLinear(stereoLink.getGainReductionLinearOut());
+
         gainReductionStage.process(buffer);
 
+        // 10.5 Character Engine (wet path — Phase 3 placement)
+        characterEngine.process(buffer);
         // 11. Parallel Mixer (represented)
         parallelMixer.process(buffer);
 
         // 12. Stereo Link application (represented)
-        stereoLink.process(buffer);
+        // (processed earlier as control plumbing before GainReductionStage)
 
         // 13-15. Output + Auto-makeup + Safety (represented)
         outputStage.process(buffer);
