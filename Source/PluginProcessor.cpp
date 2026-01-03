@@ -1,0 +1,95 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+CompassCompressorAudioProcessor::CompassCompressorAudioProcessor()
+: juce::AudioProcessor (
+      BusesProperties()
+      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+      .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+{
+}
+
+const juce::String CompassCompressorAudioProcessor::getName() const
+{
+    return JucePlugin_Name;
+}
+
+bool CompassCompressorAudioProcessor::acceptsMidi() const
+{
+   #if JucePlugin_WantsMidiInput
+    return true;
+   #else
+    return false;
+   #endif
+}
+
+bool CompassCompressorAudioProcessor::producesMidi() const
+{
+   #if JucePlugin_ProducesMidiOutput
+    return true;
+   #else
+    return false;
+   #endif
+}
+
+bool CompassCompressorAudioProcessor::isMidiEffect() const
+{
+   #if JucePlugin_IsMidiEffect
+    return true;
+   #else
+    return false;
+   #endif
+}
+
+double CompassCompressorAudioProcessor::getTailLengthSeconds() const
+{
+    return 0.0;
+}
+
+int CompassCompressorAudioProcessor::getNumPrograms() { return 1; }
+int CompassCompressorAudioProcessor::getCurrentProgram() { return 0; }
+void CompassCompressorAudioProcessor::setCurrentProgram (int) {}
+const juce::String CompassCompressorAudioProcessor::getProgramName (int) { return {}; }
+void CompassCompressorAudioProcessor::changeProgramName (int, const juce::String&) {}
+
+void CompassCompressorAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    pipeline.prepare(sampleRate, samplesPerBlock);
+}
+
+void CompassCompressorAudioProcessor::releaseResources() {}
+
+#ifndef JucePlugin_PreferredChannelConfigurations
+bool CompassCompressorAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    // Minimal Phase 0: allow mono/stereo in==out only
+    const auto mainIn  = layouts.getMainInputChannelSet();
+    const auto mainOut = layouts.getMainOutputChannelSet();
+    if (mainIn != mainOut) return false;
+    return (mainOut == juce::AudioChannelSet::mono() || mainOut == juce::AudioChannelSet::stereo());
+}
+#endif
+
+void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    pipeline.process(buffer);
+
+    juce::ScopedNoDenormals noDenormals;
+    // Phase 0 pass-through: do nothing
+    (void) buffer;
+}
+
+bool CompassCompressorAudioProcessor::hasEditor() const { return true; }
+juce::AudioProcessorEditor* CompassCompressorAudioProcessor::createEditor()
+{
+    return new CompassCompressorAudioProcessorEditor (*this);
+}
+
+void CompassCompressorAudioProcessor::getStateInformation (juce::MemoryBlock&) {}
+void CompassCompressorAudioProcessor::setStateInformation (const void*, int) {}
+
+// This factory must exist for AU/VST3 builds
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new CompassCompressorAudioProcessor();
+}

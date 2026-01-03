@@ -1,0 +1,12 @@
+{
+	"InstallScripts" : 
+	[
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/cmake_install.cmake",
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/JUCE/cmake_install.cmake",
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/JUCE/modules/cmake_install.cmake",
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/JUCE/extras/Build/cmake_install.cmake",
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/JUCE/extras/Build/juceaide/cmake_install.cmake",
+		"/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/4_Code/build_phase0/Source/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

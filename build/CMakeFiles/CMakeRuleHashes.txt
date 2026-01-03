@@ -1,0 +1,3 @@
+# Hashes of file build rules.
+65f21ec0866e028c12d8bc5092d75ce0 Source/CompassCompressor_artefacts/JuceLibraryCode/CompassCompressor_AU/PkgInfo
+d3ec3bb02870e87e65198f7831d3c2ea Source/CompassCompressor_artefacts/JuceLibraryCode/CompassCompressor_VST3/PkgInfo
