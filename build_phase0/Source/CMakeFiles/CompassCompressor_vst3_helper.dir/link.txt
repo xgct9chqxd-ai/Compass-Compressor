@@ -1,1 +1,0 @@
-/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/CompassCompressor_vst3_helper.dir/Users/johncollins/JUCE/modules/juce_audio_plugin_client/VST3/juce_VST3ManifestHelper.mm.o -o CompassCompressor_vst3_helper  -framework Foundation

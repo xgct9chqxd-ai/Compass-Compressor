@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Patch workflow backups
+**/*.bak_*
+**/.bak_*
+**/*CREATED_FILES*.txt
+
+# CMake / build output
+build/
+build_*/
+build-*/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/Makefile
+**/*.ninja
+**/*.log
+
+# JUCE / IDE generated (optional)
+**/JuceLibraryCode/
