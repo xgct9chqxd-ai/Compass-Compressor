@@ -5,6 +5,11 @@
 class CompassCompressorAudioProcessor final : public juce::AudioProcessor
 {
 public:
+
+    // Phase 6: APVTS access for UI attachments (no behavior change)
+    juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+    const juce::AudioProcessorValueTreeState& getAPVTS() const noexcept { return apvts; }
+
     CompassCompressorAudioProcessor();
     ~CompassCompressorAudioProcessor() override = default;
 

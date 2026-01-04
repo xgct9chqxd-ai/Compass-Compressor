@@ -270,20 +270,16 @@ lowEndGuard.setCurrentRatio(userRatio);
             const double targetR = smoothstepInv01(t);
 
             // Smooth normalized release to avoid abrupt changes (τ = 10 ms)
-            const double sr_local = (sampleRateHz > 0.0 ? sampleRateHz : 48000.0);
-            const int n_local = buffer.getNumSamples();
             const double tau = 0.010;
-            const double a = std::exp(-(double)n / (tau * sr));
+            const double a = std::exp(-(double)n_local / (tau * sr_local));
             smoothedReleaseNorm = a * smoothedReleaseNorm + (1.0 - a) * targetR;
         }
 // Phase 4B.2 — Ratio Softening (control wiring only; no parameters/UI)
         // Smooth ratioBias (τ = 10 ms) then apply additively to injected userRatio.
         static double smoothedRatioBias = 0.0;
         const double targetRatioBias = lowEndGuard.getRatioBias();
-        const double sr_local = (sampleRateHz > 0.0 ? sampleRateHz : 48000.0);
-        const int n_local = buffer.getNumSamples();
-        const double tau = 0.010; // 10 ms
-        const double a = std::exp(-(double)n / (tau * sr));
+const double tau = 0.010; // 10 ms
+        const double a = std::exp(-(double)n_local / (tau * sr_local));
         smoothedRatioBias = a * smoothedRatioBias + (1.0 - a) * targetRatioBias;
 
         double effectiveRatio = userRatio + smoothedRatioBias;
@@ -300,7 +296,7 @@ lowEndGuard.setCurrentRatio(userRatio);
                 // Phase 4D.2A — TransientGuard wiring (attackBias01 -> next-block attack bias)
         // NOTE: attackBias01 is computed later in the block (after gainComputer), so we apply it next block.
         static double tgAttackBias01 = 0.0;
-        auto clamp01_local = [](double x)
+        auto clamp01_tg = [](double x)
         {
             if (x < 0.0) return 0.0;
             if (x > 1.0) return 1.0;
@@ -308,7 +304,7 @@ lowEndGuard.setCurrentRatio(userRatio);
         };
         constexpr double kTgAttackBiasK = 0.25; // sealed
         const double A0 = detectorCore.getAttackNormalized();
-        const double Ab = clamp01_local(A0 + kTgAttackBiasK * clamp01_local(tgAttackBias01));
+        const double Ab = clamp01_tg(A0 + kTgAttackBiasK * clamp01_local(tgAttackBias01));
         hybridEnvelopeEngine.setAttackNormalized(Ab);
 
         hybridEnvelopeEngine.setReleaseNormalized(smoothedReleaseNorm);

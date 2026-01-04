@@ -1,5 +1,5 @@
 juce_add_plugin(CompassCompressor
-    COMPANY_NAME "Compass Audio"
+    COMPANY_NAME "Compass"
     PLUGIN_NAME "CompassCompressor"
     PLUGIN_MANUFACTURER_CODE CmpA
     PLUGIN_CODE CmpC

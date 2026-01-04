@@ -106,7 +106,27 @@ bool CompassCompressorAudioProcessor::isBusesLayoutSupported (const BusesLayout&
 
 void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    // Phase 5: capture dry for    // Phase 5: post-pipeline controls (no topology change inside pipeline)
+    juce::ScopedNoDenormals noDenormals;
+
+    // Phase 5: capture dry pre-process (no allocations; buffer size preallocated in prepareToPlay)
+    dryBuffer.makeCopyOf (buffer, true);
+
+    // Phase 5: read APVTS params (raw)
+    const float thrDb      = apvts.getRawParameterValue("threshold")->load();
+    const float ratioVal   = apvts.getRawParameterValue("ratio")->load();
+    const float attackMs   = apvts.getRawParameterValue("attack")->load();
+    const float releaseMs  = apvts.getRawParameterValue("release")->load();
+    const float mixPct     = apvts.getRawParameterValue("mix")->load();
+    const float outGainDb  = apvts.getRawParameterValue("output_gain")->load();
+    const bool  autoMakeup = (apvts.getRawParameterValue("auto_makeup")->load() >= 0.5f);
+
+    // Feed pipeline targets (pipeline handles smoothing)
+    pipeline.setControlTargets((double)thrDb, (double)ratioVal, (double)attackMs, (double)releaseMs);
+
+    // Run core DSP
+    pipeline.process(buffer);
+
+    // Phase 5: post-pipeline controls (no topology change inside pipeline)
     // Mix: dry/wet crossfade in [0..1]
     const float mix01 = juce::jlimit(0.0f, 1.0f, mixPct * 0.01f);
 
@@ -115,8 +135,8 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     if (autoMakeup)
     {
         // Conservative sealed heuristic: more makeup as threshold lowers and ratio rises (bounded)
-        const float thrPos = juce::jlimit(0.0f, 60.0f, -thrDb);                 // 0..60
-        const float rNorm  = juce::jlimit(0.0f, 1.0f, (ratio - 1.5f) / (20.0f - 1.5f)); // 0..1
+        const float thrPos = juce::jlimit(0.0f, 60.0f, -thrDb);                           // 0..60
+        const float rNorm  = juce::jlimit(0.0f, 1.0f, (ratioVal - 1.5f) / (20.0f - 1.5f)); // 0..1
         makeupDb = juce::jlimit(0.0f, 12.0f, 0.12f * thrPos * (0.35f + 0.65f * rNorm));
     }
 
@@ -138,26 +158,6 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
             w[i] = x * outLin;
         }
     }
- 
-    dryBuffer.makeCopyOf (buffer, true);
-
-    // Phase 5: read APVTS params (raw) and feed pipeline targets (pipeline handles smoothing)
-    
-    const float thrDb      = apvts.getRawParameterValue("threshold")->load();
-    const float ratioVal   = apvts.getRawParameterValue("ratio")->load();
-    const float attackMs   = apvts.getRawParameterValue("attack")->load();
-    const float releaseMs  = apvts.getRawParameterValue("release")->load();
-    const float mixPct     = apvts.getRawParameterValue("mix")->load();
-    const float outGainDb  = apvts.getRawParameterValue("output_gain")->load();
-    const bool  autoMakeup = (apvts.getRawParameterValue("auto_makeup")->load() >= 0.5f);
-
-    pipeline.setControlTargets((double)thrDb, (double)ratioVal, (double)attackMs, (double)releaseMs);
-
-    pipeline.process(buffer);
-
-    juce::ScopedNoDenormals noDenormals;
-    // Phase 0 pass-through: do nothing
-    (void) buffer;
 }
 
 bool CompassCompressorAudioProcessor::hasEditor() const { return true; }
