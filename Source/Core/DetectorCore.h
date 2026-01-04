@@ -5,6 +5,7 @@
 #pragma once
 #include <JuceHeader.h>
 
+#include <vector>
 struct DetectorCore
 {
     void prepare (double sr, int)
@@ -15,6 +16,12 @@ struct DetectorCore
         // A smoothing τ = 250 µs
         setOnePoleTimeConstantSeconds(aSmoother, 250e-6);
 
+
+        // Detector-only HPF cutoff smoothing (sealed): τ = 2 ms
+        setOnePoleTimeConstantSeconds(hpfCutoffSmoother, 2e-3);
+
+        // Low-end dominance smoothing (sealed for Phase 4C.1): τ = 30 ms
+        setOnePoleTimeConstantSeconds(dominanceSmoother, 0.030);
         reset();
     }
 
@@ -28,6 +35,17 @@ struct DetectorCore
 
         attackNormTarget = 0.0;
         attackNormSmoothed = 0.0;
+
+        // Detector-only HPF (measurement path only) — disabled by default
+        detectorHpfCutoffHzTarget   = 0.0;   // 0 = disabled
+        detectorHpfCutoffHzSmoothed = 0.0;
+        hpfCutoffSmoother.reset(0.0);
+        for (auto& z : hpfLpState) z = 0.0;
+
+        // Low-end dominance (detector-only measurement)
+        lowEndDominance01 = 0.0;
+        dominanceSmoother.reset(0.0);
+        for (auto& z : lowLpState) z = 0.0;
     }
 
     // Phase 2: Peak/RMS + detector blend math (α/β/γ) is implemented.
@@ -42,25 +60,76 @@ struct DetectorCore
             return;
         }
 
+
+        // Detector-only HPF: affects measurement only (no audio-path change)
+        if ((int)hpfLpState.size() < numCh)
+            hpfLpState.resize((size_t)numCh, 0.0);
+
+        // Low-end dominance LP state (measurement path only)
+        if ((int)lowLpState.size() < numCh)
+            lowLpState.resize((size_t)numCh, 0.0);
+
+        // Smooth cutoff (Hz). 0 => disabled.
+        detectorHpfCutoffHzSmoothed = hpfCutoffSmoother.process(detectorHpfCutoffHzTarget);
+        const double fc = detectorHpfCutoffHzSmoothed;
+        const bool hpfEnabled = (std::isfinite(fc) && fc > 0.0);
+        const double fs = (sampleRate > 0.0 ? sampleRate : 48000.0);
+        const double gHpf = hpfEnabled ? (1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * fc / fs)) : 0.0;
         // Compute peak + RMS over the block (linear domain), across all channels.
         double peak = 0.0;
         long double sumSq = 0.0L;
         const long double invN = 1.0L / (long double)(numCh * numS);
 
-        for (int ch = 0; ch < numCh; ++ch)
+        // Low-end dominance measurement (detector-only): one-pole LP @ 120 Hz on measurement signal
+        long double sumSqLow = 0.0L;
+        constexpr double kLowFcHz = 120.0;
+        const double gLow = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * kLowFcHz / fs);
+
+                for (int ch = 0; ch < numCh; ++ch)
         {
             const float* x = buffer.getReadPointer(ch);
+            double lp = hpfLpState[(size_t)ch];
+            double lowLp = lowLpState[(size_t)ch];
             for (int i = 0; i < numS; ++i)
             {
                 const double v = (double) x[i];
-                const double a = std::abs(v);
+
+                // Measurement signal: optional HPF (y = x - lp)
+                if (hpfEnabled)
+                {
+                    lp += gHpf * (v - lp);
+                }
+                const double y = hpfEnabled ? (v - lp) : v;
+
+                // Low-end band proxy (measurement only): one-pole low-pass of y
+                lowLp += gLow * (y - lowLp);
+                sumSqLow += (long double)lowLp * (long double)lowLp;
+
+                const double a = std::abs(y);
                 if (a > peak) peak = a;
-                sumSq += (long double)v * (long double)v;
+                sumSq += (long double)y * (long double)y;
             }
+            hpfLpState[(size_t)ch] = lp;
+            lowLpState[(size_t)ch] = lowLp;
         }
 
         peakLin = peak;
         rmsLin  = std::sqrt((double)(sumSq * invN));
+
+        // Low-end dominance01 (detector-only): ratio of low-band RMS to total RMS, shaped by pow(·, 0.7)
+        constexpr double kEps = 1e-12;
+        const double lowRms = std::sqrt((double)(sumSqLow * invN));
+        const double totalRms = rmsLin;
+        double ratio = lowRms / std::max(totalRms, kEps);
+        if (!std::isfinite(ratio)) ratio = 0.0;
+        ratio = clamp01(ratio);
+        double domRaw = std::pow(ratio, 0.7);
+        if (!std::isfinite(domRaw)) domRaw = 0.0;
+        domRaw = clamp01(domRaw);
+
+        lowEndDominance01 = dominanceSmoother.process(domRaw);
+        if (!std::isfinite(lowEndDominance01)) lowEndDominance01 = 0.0;
+        lowEndDominance01 = clamp01(lowEndDominance01);
 
         // A = attack_normalized ∈ [0,1], one-pole smoothed τ = 250 µs
         attackNormSmoothed = aSmoother.process(clamp01(attackNormTarget));
@@ -91,6 +160,20 @@ struct DetectorCore
         attackNormTarget = clamp01(a);
     }
 
+
+    // Detector-only HPF cutoff (Hz). 0 disables the measurement HPF.
+    // This is an injected control feed (NOT a parameter).
+    void setDetectorHpfCutoffHz (double hz)
+    {
+        if (!std::isfinite(hz) || hz <= 0.0)
+        {
+            detectorHpfCutoffHzTarget = 0.0;
+            return;
+        }
+
+        const double clamped = juce::jlimit(1.0, 20000.0, hz);
+        detectorHpfCutoffHzTarget = clamped;
+    }
     // Release normalized (R) placeholder feed for Phase 2+ weighting logic (defined in HybridEnvelopeEngine).
     // Stored here for convenience if you want DetectorCore to be the single "detector state" carrier.
     void setReleaseNormalized (double r)
@@ -118,6 +201,8 @@ struct DetectorCore
     double getRmsLinear() const       { return rmsLin; }
     double getTransientLinear() const { return transientLin; }
     double getDetectorLinear() const  { return detectorLin; }
+
+    double getLowEndDominance() const { return clamp01(lowEndDominance01); }
 
     double getAttackNormalized() const  { return clamp01(attackNormSmoothed); }
     double getReleaseNormalized() const { return clamp01(releaseNorm); }
@@ -171,6 +256,17 @@ private:
     double attackNormSmoothed = 0.0;
     OnePole aSmoother;
 
+
+    // Detector-only HPF (measurement path only)
+    double detectorHpfCutoffHzTarget   = 0.0; // 0 = disabled
+    double detectorHpfCutoffHzSmoothed = 0.0;
+    OnePole hpfCutoffSmoother;
+    std::vector<double> hpfLpState;
+
+    // Low-end dominance (detector-only measurement)
+    OnePole dominanceSmoother;
+    std::vector<double> lowLpState;
+    double lowEndDominance01 = 0.0;
     // Placeholder normalized feeds for later phases / weighting logic
     double releaseNorm = 0.0; // R
     double crestNorm   = 0.0; // C
