@@ -12,19 +12,19 @@ struct HybridEnvelopeEngine
         sampleRate = (sr > 0.0 ? sr : 48000.0);
 
         // Weight smoothing law (sealed): one-pole LPF τ = 0.4 ms
-        setOnePoleTimeConstantSeconds(wSmootherOpto, 0.0004);
-        setOnePoleTimeConstantSeconds(wSmootherVca,  0.0004);
-        setOnePoleTimeConstantSeconds(wSmootherFet,  0.0004);
+        setOnePoleTimeConstantSeconds(wSmootherSustained, 0.0004);
+        setOnePoleTimeConstantSeconds(wSmootherBalanced,  0.0004);
+        setOnePoleTimeConstantSeconds(wSmootherFast,  0.0004);
 
         reset();
     }
 
     void reset()
     {
-        // Envelope placeholders (no invented math in Phase 2)
-        envOpto = 0.0;
-        envVca  = 0.0;
-        envFet  = 0.0;
+        // Response placeholders (no invented math in Phase 2)
+        envSustained = 0.0;
+        envBalanced  = 0.0;
+        envFast  = 0.0;
 
         // Inputs (injected)
         detectorLin = 0.0;
@@ -33,14 +33,14 @@ struct HybridEnvelopeEngine
         crestNorm   = 0.5;   // C default allowed by foreman path
 
         // Smoothed weights (start neutral)
-        wOpto = 1.0 / 3.0;
-        wVca  = 1.0 / 3.0;
-        wFet  = 1.0 / 3.0;
+        wSustained = 1.0 / 3.0;
+        wBalanced  = 1.0 / 3.0;
+        wFast  = 1.0 / 3.0;
 
         // Reset smoothers to current values
-        wSmootherOpto.reset(wOpto);
-        wSmootherVca.reset(wVca);
-        wSmootherFet.reset(wFet);
+        wSmootherSustained.reset(wSustained);
+        wSmootherBalanced.reset(wBalanced);
+        wSmootherFast.reset(wFast);
 
         grEnv = 0.0;
     }
@@ -54,32 +54,32 @@ struct HybridEnvelopeEngine
         const double C = clamp01(crestNorm);
 
         // Weighting logic (EXACT from DSP & Math Constitution)
-        double wOptoRaw = 0.7 * (1.0 - A) + 0.2 * (1.0 - R) + 0.3 * C;
-        double wVcaRaw  = 0.5 + 0.4 * (1.0 - std::abs(2.0 * A - 1.0)) + 0.2 * (1.0 - R);
-        double wFetRaw  = 0.6 * A + 0.5 * R + 0.4 * (1.0 - C);
+        double wSustainedRaw = 0.7 * (1.0 - A) + 0.2 * (1.0 - R) + 0.3 * C;
+        double wBalancedRaw  = 0.5 + 0.4 * (1.0 - std::abs(2.0 * A - 1.0)) + 0.2 * (1.0 - R);
+        double wFastRaw  = 0.6 * A + 0.5 * R + 0.4 * (1.0 - C);
 
-        wOptoRaw = clamp01(wOptoRaw);
-        wVcaRaw  = clamp01(wVcaRaw);
-        wFetRaw  = clamp01(wFetRaw);
+        wSustainedRaw = clamp01(wSustainedRaw);
+        wBalancedRaw  = clamp01(wBalancedRaw);
+        wFastRaw  = clamp01(wFastRaw);
 
-        const double sum = wOptoRaw + wVcaRaw + wFetRaw;
-        double nOpto = (sum > 0.0 ? (wOptoRaw / sum) : (1.0 / 3.0));
-        double nVca  = (sum > 0.0 ? (wVcaRaw  / sum) : (1.0 / 3.0));
-        double nFet  = (sum > 0.0 ? (wFetRaw  / sum) : (1.0 / 3.0));
+        const double sum = wSustainedRaw + wBalancedRaw + wFastRaw;
+        double nSustained = (sum > 0.0 ? (wSustainedRaw / sum) : (1.0 / 3.0));
+        double nBalanced  = (sum > 0.0 ? (wBalancedRaw  / sum) : (1.0 / 3.0));
+        double nFast  = (sum > 0.0 ? (wFastRaw  / sum) : (1.0 / 3.0));
 
         // One-pole LPF τ = 0.4 ms (sealed)
-        wOpto = wSmootherOpto.process(nOpto);
-        wVca  = wSmootherVca.process(nVca);
-        wFet  = wSmootherFet.process(nFet);
+        wSustained = wSmootherSustained.process(nSustained);
+        wBalanced  = wSmootherBalanced.process(nBalanced);
+        wFast  = wSmootherFast.process(nFast);
 
         // Envelopes (Phase 2 constitutional-safe placeholder: no invented envelope equations)
-        // All three envelopes receive detectorLin equally for now.
-        envOpto = detectorLin;
-        envVca  = detectorLin;
-        envFet  = detectorLin;
+        // All three responses receive detectorLin equally for now.
+        envSustained = detectorLin;
+        envBalanced  = detectorLin;
+        envFast  = detectorLin;
 
         // Final hybrid blend law (sealed)
-        grEnv = wOpto * envOpto + wVca * envVca + wFet * envFet;
+        grEnv = wSustained * envSustained + wBalanced * envBalanced + wFast * envFast;
 
         if (!std::isfinite(grEnv) || grEnv < 0.0)
             grEnv = 0.0;
@@ -96,13 +96,13 @@ struct HybridEnvelopeEngine
     // ----------------------------
     // Readouts
     // ----------------------------
-    double getWOpto() const { return wOpto; }
-    double getWVca()  const { return wVca; }
-    double getWFet()  const { return wFet; }
+    double getWSustainedResponse() const { return wSustained; }
+    double getWBalancedResponse()  const { return wBalanced; }
+    double getWFastResponse()  const { return wFast; }
 
-    double getEnvOpto() const { return envOpto; }
-    double getEnvVca()  const { return envVca; }
-    double getEnvFet()  const { return envFet; }
+    double getSustainedResponse() const { return envSustained; }
+    double getBalancedResponse()  const { return envBalanced; }
+    double getFastResponse()  const { return envFast; }
 
     double getHybridEnv() const { return grEnv; }
 
@@ -147,19 +147,19 @@ private:
     double crestNorm   = 0.5; // C
 
     // Weight smoothers (τ = 0.4 ms)
-    OnePole wSmootherOpto;
-    OnePole wSmootherVca;
-    OnePole wSmootherFet;
+    OnePole wSmootherSustained;
+    OnePole wSmootherBalanced;
+    OnePole wSmootherFast;
 
     // Smoothed weights (sum ~ 1)
-    double wOpto = 1.0 / 3.0;
-    double wVca  = 1.0 / 3.0;
-    double wFet  = 1.0 / 3.0;
+    double wSustained = 1.0 / 3.0;
+    double wBalanced  = 1.0 / 3.0;
+    double wFast  = 1.0 / 3.0;
 
-    // Envelope placeholders (Phase 2)
-    double envOpto = 0.0;
-    double envVca  = 0.0;
-    double envFet  = 0.0;
+    // Response placeholders (Phase 2)
+    double envSustained = 0.0;
+    double envBalanced  = 0.0;
+    double envFast  = 0.0;
 
     double grEnv = 0.0;
 };

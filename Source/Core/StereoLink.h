@@ -30,7 +30,8 @@ struct StereoLink
         // Smoothing state
         corrSmoothed = correlation01;
 
-        // Outputs (Phase 3 plumbing placeholders)
+                linkSmoothed = 0.5;
+// Outputs (Phase 3 plumbing placeholders)
         grDbOut  = 0.0;
         grLinOut = 1.0;
     }
@@ -45,9 +46,78 @@ struct StereoLink
         correlation01 = measureCorrelation01(buffer);
 
         // Placeholder: pass-through until link law is implemented.
-        grDbOut  = grDbIn;
-        grLinOut = grLinIn;
 
+        // Phase 4 Step 2 — Stereo Integrity Guard (sealed control law)
+        // - Correlation-aware linking in [0.50 .. 0.90] (floor 50%)
+        // - Continuous, smoothed influence (τ ≈ 30 ms)
+        // - Subtle bounded side protection (relax linking up to -0.15 on side-heavy content; no widening)
+        //
+        // Note: StereoLink remains control-only; it does not modify audio samples.
+        {
+            const double fs = (sr > 0.0 ? sr : 48000.0);
+            const int n = buffer.getNumSamples();
+
+            // Smooth correlation for stability
+            const double corrNow = clamp01(correlation01);
+            const double tauCorr = 0.030; // 30 ms
+            const double aCorr = std::exp(-(double)n / (tauCorr * fs));
+            corrSmoothed = aCorr * corrSmoothed + (1.0 - aCorr) * corrNow;
+
+            // Side dominance estimate (bounded)
+            double sideDom01 = 0.0;
+            if (buffer.getNumChannels() >= 2)
+            {
+                const float* L = buffer.getReadPointer(0);
+                const float* R = buffer.getReadPointer(1);
+                double midE = 0.0, sideE = 0.0;
+                for (int i = 0; i < n; ++i)
+                {
+                    const double l = (double)L[i];
+                    const double r = (double)R[i];
+                    const double m = 0.5 * (l + r);
+                    const double s = 0.5 * (l - r);
+                    midE  += m * m;
+                    sideE += s * s;
+                }
+                const double eps = 1e-18;
+                const double midRms  = std::sqrt(midE  / std::max(1, n));
+                const double sideRms = std::sqrt(sideE / std::max(1, n));
+                sideDom01 = clamp01(sideRms / (midRms + sideRms + eps));
+            }
+
+            auto smooth01 = [](double x)
+            {
+                x = clamp01(x);
+                return x * x * (3.0 - 2.0 * x); // smoothstep
+            };
+
+            // Map corr -> link in [0.50..0.90] (higher corr => stronger linking)
+            const double corrCurve = smooth01(corrSmoothed);
+            double linkTarget = 0.50 + 0.40 * corrCurve;
+
+            // Bounded side protection: relax linking when side dominates (no widening)
+            linkTarget -= 0.15 * smooth01(sideDom01);
+
+            if (!std::isfinite(linkTarget)) linkTarget = 0.50;
+            if (linkTarget < 0.50) linkTarget = 0.50;
+            if (linkTarget > 0.90) linkTarget = 0.90;
+
+            // Smooth link amount
+            const double tauLink = 0.030; // 30 ms
+            const double aLink = std::exp(-(double)n / (tauLink * fs));
+            linkSmoothed = aLink * linkSmoothed + (1.0 - aLink) * linkTarget;
+
+            // Apply as stereo-safety influence on GR (control-only)
+            const double inLin = clamp01(grLinIn);
+            double outLin = std::pow(inLin, linkSmoothed); // less GR when link is relaxed
+            if (!std::isfinite(outLin) || outLin <= 0.0 || outLin > 1.0) outLin = 1.0;
+
+            grLinOut = outLin;
+
+            const double epsDb = 1e-12;
+            const double outDb = -20.0 * std::log10(std::max(outLin, epsDb));
+            grDbOut = (std::isfinite(outDb) && outDb >= 0.0) ? outDb : 0.0;
+        }
         if (!std::isfinite(grDbOut))  grDbOut = 0.0;
         if (!std::isfinite(grLinOut) || grLinOut <= 0.0) grLinOut = 1.0;
     }
@@ -119,7 +189,9 @@ private:
     double corrAlpha    = 0.99;
     double corrSmoothed = 1.0;
 
-    // Injected (plumbing)
+    
+    double linkSmoothed = 0.5;  // smoothed link amount (0.50..0.90)
+// Injected (plumbing)
     double linkAmountNorm = 0.5;  // 0..1 (later maps to 50–90%)
     double correlation01  = 1.0;  // 0..1
     double grDbIn         = 0.0;

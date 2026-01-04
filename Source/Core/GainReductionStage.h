@@ -1,6 +1,6 @@
-// Phase 1 Skeleton (NO-OP): structural placeholder only.
-// No DSP math. No parameters. No UI logic.
-// Must remain transparent pass-through.
+// Phase 3 Sealed DSP (ACTIVE): Gain reduction application stage.
+// No new parameters. No UI logic.
+// This stage applies computed GR (linear) to the audio buffer.
 
 #pragma once
 #include <JuceHeader.h>
@@ -17,8 +17,28 @@ struct GainReductionStage
     }
 
     // Phase 1: no-op. Later: apply computed GR sample-accurate.
-    // Phase 3.0B.2A: plumbing only (NO audio modification).
-    void process (juce::AudioBuffer<float>&) {}
+    // Phase 3B.2: apply GR linear to audio (sample-accurate).
+    void process (juce::AudioBuffer<float>& buffer)
+    {
+        const int numCh = buffer.getNumChannels();
+        const int numS  = buffer.getNumSamples();
+        if (numCh <= 0 || numS <= 0)
+            return;
+
+        double g = grLin;
+        // Safety clamp: keep sane domain (0, 1]
+        if (!std::isfinite(g) || g <= 0.0 || g > 1.0)
+            g = 1.0;
+
+        const float gf = (float) g;
+
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            float* x = buffer.getWritePointer(ch);
+            for (int i = 0; i < numS; ++i)
+                x[i] *= gf;
+        }
+    }
 
     // ----------------------------
     // Injection slots (NOT parameters)

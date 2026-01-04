@@ -38,5 +38,10 @@ public:
 
 private:
     CompressorPipeline pipeline;
+
+    // Phase 5: parameter smoothing + wiring support (no UI)
+    juce::AudioBuffer<float> dryBuffer; // preallocated in prepareToPlay for Mix blend
+    juce::AudioProcessorValueTreeState apvts;
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CompassCompressorAudioProcessor)
 };

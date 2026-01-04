@@ -24,7 +24,6 @@ target_sources(CompassCompressor PRIVATE
     Core/DetectorCore.h
     Core/HybridEnvelopeEngine.h
     Core/GainComputer.h
-    Core/CharacterEngine.h
     Core/GainReductionStage.h
     Core/ParallelMixer.h
     Core/StereoLink.h
