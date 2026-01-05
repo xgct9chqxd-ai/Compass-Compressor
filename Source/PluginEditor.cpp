@@ -58,10 +58,23 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
 
         // Inset a little to keep strokes crisp inside the well
         auto outer = r.reduced (22.0f, 22.0f);
+
+        // Build the bar track first (as before), then reserve a left label lane tied to this bar
         auto track = outer.withHeight (12.0f);
         track.setCentre (outer.getCentre());
 
+        const float labelW = 28.0f;
+        const float gapW   = 10.0f;
+
+        auto labelR = track.removeFromLeft (labelW);
+        track.removeFromLeft (gapW);
+
         const float radius = 8.0f;
+
+        // "GR" label — tied to the bar (left lane, vertically centered)
+        g.setColour (juce::Colour (0xfff0f0f0).withAlpha (0.55f));
+        g.setFont (juce::Font (12.0f, juce::Font::bold));
+        g.drawFittedText ("GR", labelR.toNearestInt(), juce::Justification::centred, 1);
 
         // Track base (subtle)
         g.setColour (juce::Colours::black.withAlpha (0.25f));
@@ -108,9 +121,9 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
 
         // Value readout (clamped 0..-60 dB)
         {
-            const auto valR = juce::Rectangle<int> ((int) track.getX(),
-                                                   (int) track.getBottom() + 4,
-                                                   (int) track.getWidth(),
+            const auto valR = juce::Rectangle<int> ((int) std::round (track.getX()),
+                                                   (int) std::round (track.getBottom() + 4.0f),
+                                                   (int) std::round (track.getWidth()),
                                                    16);
             g.setColour (juce::Colours::white.withAlpha (0.55f));
             g.setFont (juce::Font (11.0f));
@@ -218,16 +231,16 @@ namespace
         static constexpr int kX_ratio   = 175;
         static constexpr int kX_attack  = 305;
         static constexpr int kX_release = 435;
-        static constexpr int kX_mix     = 565;
+        static constexpr int kX_mix     = 575;
         static constexpr int kX_output  = 689;
 
         // Toggle
                 // Toggle
-        static constexpr int toggleW = 64;
-        static constexpr int toggleH = 22;
-        static constexpr int toggleY = topY + topH - toggleH - 6;
+        static constexpr int toggleW = 56;
+        static constexpr int toggleH = 20;
+        static constexpr int toggleY = topY + topH - toggleH - 4;
         // Right-align to the top panel edge (small inset to avoid kissing the stroke)
-        static constexpr int toggleX = topX + topW - toggleW - 6;
+        static constexpr int toggleX = topX + topW - toggleW - 2;
 
         static inline juce::Rectangle<int> knobRect(int x) noexcept { return { x, knobY, D, D }; }
         static inline juce::Rectangle<int> meterRect() noexcept { return { meterX, meterY, meterW, meterH }; }
@@ -246,6 +259,21 @@ namespace
         juce::ColourGradient baseGrad (topCol, 0.0f, 0.0f, botCol, 0.0f, (float)UiMetrics::H, false);
         pg.setGradientFill (baseGrad);
         pg.fillRect (full);
+
+        // Background image behind panels (very subtle)
+        {
+            const juce::File bgFile ("/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/6_Assets/Background.png");
+            if (bgFile.existsAsFile())
+            {
+                auto bgImg = juce::ImageFileFormat::loadFrom (bgFile);
+                if (bgImg.isValid())
+                {
+                    pg.setOpacity (0.30f);
+                    pg.drawImageWithin (bgImg, 0, 0, UiMetrics::W, UiMetrics::H, juce::RectanglePlacement::stretchToFit);
+                    pg.setOpacity (1.0f);
+                }
+            }
+        }
 
         // Recessed wells (top zone + meter window)
         auto drawWell = [&](juce::Rectangle<int> r, float radius)
@@ -642,10 +670,10 @@ void CompassCompressorAudioProcessorEditor::paint (juce::Graphics& g)
         };
 
         const auto labelCol = juce::Colour ((juce::uint8)185, (juce::uint8)185, (juce::uint8)185);
-        const auto valueCol = juce::Colour ((juce::uint8)210, (juce::uint8)210, (juce::uint8)210);
+        const auto valueCol = juce::Colour ((juce::uint8)185, (juce::uint8)185, (juce::uint8)185);
 
-        const int labelY = 138;
-        const int valueY = 160;
+        const int labelY = 168;
+        const int valueY = 186;
         const int labelH = 14;
         const int valueH = 16;
 
