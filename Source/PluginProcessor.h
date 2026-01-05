@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <atomic>
 #include "Core/CompressorPipeline.h"
 
 class CompassCompressorAudioProcessor final : public juce::AudioProcessor
@@ -9,6 +10,9 @@ public:
     // Phase 6: APVTS access for UI attachments (no behavior change)
     juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
     const juce::AudioProcessorValueTreeState& getAPVTS() const noexcept { return apvts; }
+
+    // UI meter tap: negative dB (0..-60), thread-safe
+    float getGainReductionMeterDb() const noexcept { return grMeterDb.load(std::memory_order_relaxed); }
 
     CompassCompressorAudioProcessor();
     ~CompassCompressorAudioProcessor() override = default;
@@ -43,6 +47,10 @@ public:
 
 private:
     CompressorPipeline pipeline;
+
+
+    // UI meter state (negative dB). Written on audio thread, read on UI thread.
+    std::atomic<float> grMeterDb { 0.0f };
 
     // Phase 5: parameter smoothing + wiring support (no UI)
     juce::AudioBuffer<float> dryBuffer; // preallocated in prepareToPlay for Mix blend

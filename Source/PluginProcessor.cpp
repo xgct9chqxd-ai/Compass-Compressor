@@ -126,6 +126,11 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     // Run core DSP
     pipeline.process(buffer);
 
+    // UI GR meter tap: pipeline GR is positive dB; UI meter expects negative dB (0..-24)
+    const float grDbPos = (float) pipeline.getMeterGainReductionDb();
+    const float grDbNeg = -juce::jlimit (0.0f, 60.0f, (std::isfinite(grDbPos) ? grDbPos : 0.0f));
+    grMeterDb.store (grDbNeg, std::memory_order_relaxed);
+
     // Phase 5: post-pipeline controls (no topology change inside pipeline)
     // Mix: dry/wet crossfade in [0..1]
     const float mix01 = juce::jlimit(0.0f, 1.0f, mixPct * 0.01f);

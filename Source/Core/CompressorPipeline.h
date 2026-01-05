@@ -44,6 +44,10 @@ struct CompressorPipeline
         targetAttackMs    = (std::isfinite(attackMs) ? attackMs : 10.0);
         targetReleaseMs   = (std::isfinite(releaseMs) ? releaseMs : 100.0);
     }
+
+    // Meter tap (UI read via processor): positive dB, post-link depth
+    double getMeterGainReductionDb() const noexcept { return gainComputer.getGainReductionDb(); }
+
     void prepare (double sampleRate, int maxBlockSize)
     {
         sampleRateHz = (sampleRate > 0.0 ? sampleRate : 48000.0);
