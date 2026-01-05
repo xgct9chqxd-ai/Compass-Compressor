@@ -8,64 +8,60 @@
 struct GainReductionStage
 {
     void prepare (double sampleRate, int)
-{
-    sampleRateHz = (sampleRate > 0.0 ? sampleRate : 48000.0);
-}void reset()
+    {
+        sampleRateHz = (sampleRate > 0.0 ? sampleRate : 48000.0);
+        reset();
+    }
+
+    void reset()
     {
         // Phase 3 injected inputs (plumbing only)
         grDb  = 0.0;
         grLin = 1.0;
-        smoothedGrLin = 1.0;
 
+        smoothedGrLin[0] = 1.0;
+        smoothedGrLin[1] = 1.0;
     }
 
-    // Phase 1: no-op. Later: apply computed GR sample-accurate.
-    // Phase 3B.2: apply GR linear to audio (sample-accurate).
+    // Phase 3B.2: apply GR linear to audio (sample-accurate via within-block ramp).
     void process (juce::AudioBuffer<float>& buffer)
-{
-    juce::ScopedNoDenormals noDenormals;
-
-    const int numCh = buffer.getNumChannels();
-    const int numS  = buffer.getNumSamples();
-    if (numCh <= 0 || numS <= 0)
-        return;
-
-    // Target GR (linear) is injected upstream; keep sane domain (0, 1]
-    double gT = grLin;
-    if (!std::isfinite(gT) || gT <= 0.0 || gT > 1.0)
-        gT = 1.0;
-
-    const double fs = (sampleRateHz > 0.0 ? sampleRateHz : 48000.0);
-
-    // Sample-accurate smoothing to avoid block-stepped GR artifacts
-    constexpr double tauSec = 0.001; // 1 ms (sealed)
-    const double a = (tauSec > 0.0 && fs > 0.0) ? std::exp(-1.0 / (tauSec * fs)) : 0.0;
-
-    if (!std::isfinite(smoothedGrLin) || smoothedGrLin <= 0.0 || smoothedGrLin > 1.0)
-        smoothedGrLin = 1.0;
-
-    for (int ch = 0; ch < numCh; ++ch)
     {
-        float* x = buffer.getWritePointer(ch);
+        const int numCh = buffer.getNumChannels();
+        const int numS  = buffer.getNumSamples();
+        if (numCh <= 0 || numS <= 0)
+            return;
 
-        for (int i = 0; i < numS; ++i)
+        // Target GR (linear), sanitized to (0, 1]
+        double target = grLin;
+        if (!std::isfinite(target) || target <= 0.0 || target > 1.0)
+            target = 1.0;
+
+        // Ramp inside the block to remove block-boundary steps (buffer-size dependent fizz)
+        const double denom = (numS > 1 ? double(numS - 1) : 1.0);
+
+        for (int ch = 0; ch < numCh; ++ch)
         {
-            smoothedGrLin = a * smoothedGrLin + (1.0 - a) * gT;
+            const int si = (ch < 2 ? ch : 0); // reuse ch0 smoother for extra channels
+            double g0 = smoothedGrLin[si];
+            if (!std::isfinite(g0) || g0 <= 0.0 || g0 > 1.0) g0 = 1.0;
 
-            if (!std::isfinite(smoothedGrLin) || smoothedGrLin <= 0.0 || smoothedGrLin > 1.0)
-                smoothedGrLin = 1.0;
+            const double dg = (target - g0) / denom;
 
-            const float gf = (float) smoothedGrLin;
+            float* x = buffer.getWritePointer(ch);
+            double g = g0;
 
-            float v = x[i] * gf;
-            if (!std::isfinite(v))
-                v = 0.0f;
+            for (int i = 0; i < numS; ++i)
+            {
+                // Safety guard: keep sane domain (0, 1]
+                if (!std::isfinite(g) || g <= 0.0 || g > 1.0) g = 1.0;
+                x[i] *= (float) g;
+                g += dg;
+            }
 
-            x[i] = v;
+            // End exactly on target for continuity into next block
+            smoothedGrLin[si] = target;
         }
     }
-}
-
 
     // ----------------------------
     // Injection slots (NOT parameters)
@@ -92,6 +88,7 @@ private:
     double grDb  = 0.0;
     double grLin = 1.0;
 
-    double smoothedGrLin = 1.0;
-    double sampleRateHz = 48000.0;
+    // Internal continuity state
+    double smoothedGrLin[2] = { 1.0, 1.0 };
+    double sampleRateHz = 48000.0; // retained for future sealed variants; harmless here
 };

@@ -72,6 +72,10 @@ struct CompressorPipeline
         };
         smoothedAttackNorm     = msToNorm01(targetAttackMs, 0.1, 100.0);
         smoothedReleaseNormUser= msToNorm01(targetReleaseMs, 10.0, 1000.0);
+
+        detectorScratch.setSize (2, juce::jmax (1, maxBlockSize), false, false, true);
+        detectorScratch.clear();
+
         inputConditioning.prepare(sampleRate, maxBlockSize);
         detectorSplit.prepare(sampleRate, maxBlockSize);
         detectorCore.prepare(sampleRate, maxBlockSize);
@@ -128,11 +132,78 @@ hybridEnvelopeEngine.reset();
     // processBlock — immutable topology order per Architecture Constitution
     // Active DSP: detector → envelope → gain computer → stereo link → gain reduction
     // Safety guards wired (LowEndGuard stub)
+
+    // Default: detector == main (normal compression)
     void process (juce::AudioBuffer<float>& buffer)
+    {
+        process (buffer, buffer);
+    }
+
+    // Sidechain-capable: detectorIn is used ONLY for detector/control chain.
+    // Audio path is always processed on 'main' (buffer).
+    void process (juce::AudioBuffer<float>& main, const juce::AudioBuffer<float>& detectorIn)
     {
         // Phase 5: smooth injected parameters (block-rate one-pole; preserves history)
         const double sr_local = (sampleRateHz > 0.0 ? sampleRateHz : 48000.0);
-        const int n_local = buffer.getNumSamples();
+        const int n_local = main.getNumSamples();
+
+        // Build detectorScratch (no allocations in audio thread; sized in prepare)
+        const int mainChs = main.getNumChannels();
+        const int detChs  = detectorIn.getNumChannels();
+        const int nSamp   = main.getNumSamples();
+
+        juce::AudioBuffer<float>& det = detectorScratch;
+
+        if (mainChs <= 0 || nSamp <= 0)
+            return;
+
+        // Ensure scratch is valid (must be pre-sized in prepare; no allocations in audio thread)
+        // Allow scratch to have >= mainChs (e.g. scratch pre-sized to stereo while main is mono)
+        if (det.getNumChannels() < mainChs || det.getNumSamples() < nSamp)
+            return;
+
+        det.clear();
+
+        // Copy / upmix / downmix into scratch deterministically
+        if (detChs <= 0)
+        {
+            // No sidechain provided: use main as detector
+            for (int ch = 0; ch < mainChs; ++ch)
+                det.copyFrom(ch, 0, main, ch, 0, nSamp);
+        }
+        else if (detChs == mainChs)
+        {
+            for (int ch = 0; ch < mainChs; ++ch)
+                det.copyFrom(ch, 0, detectorIn, ch, 0, nSamp);
+        }
+        else if (detChs == 1 && mainChs == 2)
+        {
+            // Mono sidechain -> stereo detector (duplicate)
+            det.copyFrom(0, 0, detectorIn, 0, 0, nSamp);
+            det.copyFrom(1, 0, detectorIn, 0, 0, nSamp);
+        }
+        else if (detChs == 2 && mainChs == 1)
+        {
+            // Stereo sidechain -> mono detector (average)
+            const float* L = detectorIn.getReadPointer(0);
+            const float* R = detectorIn.getReadPointer(1);
+            float* M = det.getWritePointer(0);
+            for (int i = 0; i < nSamp; ++i)
+                M[i] = 0.5f * (L[i] + R[i]);
+        }
+        else
+        {
+            // Fallback: copy min channels, then duplicate ch0 to remaining
+            const int m = juce::jmin(detChs, mainChs);
+            for (int ch = 0; ch < m; ++ch)
+                det.copyFrom(ch, 0, detectorIn, ch, 0, nSamp);
+            for (int ch = m; ch < mainChs; ++ch)
+                det.copyFrom(ch, 0, det, 0, 0, nSamp);
+        }
+
+        // View with exact current block length to avoid processing tail garbage/zeros
+        juce::AudioBuffer<float> detView (det.getArrayOfWritePointers(), mainChs, 0, nSamp);
+
         auto onePoleBlock = [](double y, double x, double tauSec, int nSamp, double fs)
         {
             if (!std::isfinite(y)) y = 0.0;
@@ -181,16 +252,16 @@ hybridEnvelopeEngine.reset();
         detectorCore.setReleaseNormalized(smoothedReleaseNormUser);
 
         // 1. Input Conditioning
-        inputConditioning.process(buffer);
+        inputConditioning.process(main);
 
         // 2. Detector Split
-        detectorSplit.process(buffer);
+        detectorSplit.process(detView);
 
         // 3-7. Detector Core + Hybrid Envelopes + Weighting (represented)
         // Phase 4B.1 — inject LowEndGuard dynamic detector HPF recommendation (measurement path only)
         // NOTE: LowEndGuard is processed later in the block currently; this feeds the most recently computed HPF value.
         detectorCore.setDetectorHpfCutoffHz(lowEndGuard.getDynamicHpfFreqHz());
-        detectorCore.process(buffer);
+        detectorCore.process(detView);
         transientGuard.setTransientLinear(detectorCore.getTransientLinear());
         // Phase 4A.1 LowEndGuard integration — control plumbing only.
         // NOTE: low-end dominance is an injected signal; until DetectorCore exposes it,
@@ -202,7 +273,7 @@ hybridEnvelopeEngine.reset();
         lowEndGuard.setCurrentReleaseMs(targetReleaseMs);
                 const double userRatio = smoothedRatio;
 lowEndGuard.setCurrentRatio(userRatio);
-        lowEndGuard.process(buffer);
+        lowEndGuard.process(detView);
 
         
 
@@ -214,7 +285,7 @@ lowEndGuard.setCurrentRatio(userRatio);
         // GR depth readout source (existing readout; DualStageRelease remains no-op)
         dualStageRelease.setGainReductionDbIn(gainComputer.getGainReductionDb());
 
-        dualStageRelease.process(buffer); // no-op stub
+        dualStageRelease.process(detView); // no-op stub
 
         // Phase 4E.6 — Apply LowEndGuard releaseAdjustmentFactor into existing release control lane
         // Compute final effective release ms, then map back to normalized release lane (no new params/UI)
@@ -313,18 +384,18 @@ const double tau = 0.010; // 10 ms
 
         hybridEnvelopeEngine.setReleaseNormalized(smoothedReleaseNorm);
         hybridEnvelopeEngine.setCrestNormalized(detectorCore.getCrestNormalized());
-        hybridEnvelopeEngine.process(buffer);
+        hybridEnvelopeEngine.process(detView);
 
         // Wire hybrid detector/envelope into gain computer (Phase 3 plumbing only)
         gainComputer.setDetectorLinear(detectorCore.getDetectorLinear());
         gainComputer.setHybridEnvLinear(hybridEnvelopeEngine.getHybridEnv());
 
         // 8. Gain Computer + soft knee (represented)
-        gainComputer.process(buffer);
+        gainComputer.process(detView);
 
 
         transientGuard.setGainReductionDb(gainComputer.getGainReductionDb());
-        transientGuard.process(buffer); // no-op stub (Phase 4 plumbing)
+        transientGuard.process(detView); // no-op stub (Phase 4 plumbing)
         // Phase 4D.2A — latch computed TransientGuard output for next block’s envelope wiring
         tgAttackBias01 = transientGuard.getAttackBias01();
 
@@ -333,7 +404,7 @@ const double tau = 0.010; // 10 ms
         stereoLink.setGainReductionLinearIn(gainComputer.getGainReductionLinear());
         // Placeholder link amount until parameter wiring (Phase 5)
         // Placeholder correlation until measurement / dynamic law wiring (Phase 5)
-        stereoLink.process(buffer);
+        stereoLink.process(detView);
 
 
         // 10. Gain Reduction application (represented)
@@ -341,17 +412,17 @@ const double tau = 0.010; // 10 ms
         gainReductionStage.setGainReductionDb(stereoLink.getGainReductionDbOut());
         gainReductionStage.setGainReductionLinear(stereoLink.getGainReductionLinearOut());
 
-        gainReductionStage.process(buffer);
+        gainReductionStage.process(main);
 
         // 10.5 Character Engine (wet path — Phase 3 placement)
         // 11. Parallel Mixer (represented)
-        parallelMixer.process(buffer);
+        parallelMixer.process(main);
 
         // 12. Stereo Link application (represented)
         // (processed earlier as control plumbing before GainReductionStage)
 
         // 13-15. Output + Auto-makeup + Safety (represented)
-        outputStage.process(buffer);
+        outputStage.process(main);
         // Phase 4 Step 3 — Oversampling Safety injections (control-only)
 
         // Sealed attackMs estimate from attack normalized (A in [0..1]):
@@ -383,13 +454,13 @@ const double tau = 0.010; // 10 ms
 
         double peakAbs = 0.0;
 
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        for (int ch = 0; ch < main.getNumChannels(); ++ch)
 
         {
 
-            const float* p = buffer.getReadPointer(ch);
+            const float* p = main.getReadPointer(ch);
 
-            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            for (int i = 0; i < main.getNumSamples(); ++i)
 
             {
 
@@ -408,8 +479,10 @@ const double tau = 0.010; // 10 ms
 
         oversamplingAndSafety.setPeakAbs(peakAbs);
 
-        oversamplingAndSafety.process(buffer);
+        oversamplingAndSafety.process(main);
     }
+
+    juce::AudioBuffer<float> detectorScratch;
 
     InputConditioning      inputConditioning;
     DetectorSplit          detectorSplit;

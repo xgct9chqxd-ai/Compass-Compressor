@@ -37,8 +37,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout CompassCompressorAudioProces
 CompassCompressorAudioProcessor::CompassCompressorAudioProcessor()
 : juce::AudioProcessor (
       BusesProperties()
-      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-      .withOutput ("Output", juce::AudioChannelSet::stereo(), true)), apvts(*this, nullptr, "Parameters", createParameterLayout()) {
+      .withInput  ("Input",     juce::AudioChannelSet::stereo(), true)
+      .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)
+      .withOutput ("Output",    juce::AudioChannelSet::stereo(), true)), apvts(*this, nullptr, "Parameters", createParameterLayout()) {
 }
 
 const juce::String CompassCompressorAudioProcessor::getName() const
@@ -96,20 +97,31 @@ void CompassCompressorAudioProcessor::releaseResources() {}
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool CompassCompressorAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    // Minimal Phase 0: allow mono/stereo in==out only
+    // Main I/O: mono or stereo, input must match output
     const auto mainIn  = layouts.getMainInputChannelSet();
     const auto mainOut = layouts.getMainOutputChannelSet();
     if (mainIn != mainOut) return false;
-    return (mainOut == juce::AudioChannelSet::mono() || mainOut == juce::AudioChannelSet::stereo());
+
+    const bool mainOk = (mainOut == juce::AudioChannelSet::mono() || mainOut == juce::AudioChannelSet::stereo());
+    if (!mainOk) return false;
+
+    // Sidechain (aux input, bus index 1): allow disabled/mono/stereo
+    // If host doesn't provide the aux bus (or JUCE reports only one input bus), accept mainOk.
+    if ((int) layouts.inputBuses.size() < 2)
+        return true;
+
+    const auto sc = layouts.getChannelSet(true, 1);
+    if (sc.isDisabled())
+        return true;
+
+    const bool scOk = (sc == juce::AudioChannelSet::mono() || sc == juce::AudioChannelSet::stereo());
+    return scOk;
 }
 #endif
 
 void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-
-    // Phase 5: capture dry pre-process (no allocations; buffer size preallocated in prepareToPlay)
-    dryBuffer.makeCopyOf (buffer, true);
 
     // Phase 5: read APVTS params (raw)
     const float thrDb      = apvts.getRawParameterValue("threshold")->load();
@@ -120,11 +132,51 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     const float outGainDb  = apvts.getRawParameterValue("output_gain")->load();
     const bool  autoMakeup = (apvts.getRawParameterValue("auto_makeup")->load() >= 0.5f);
 
+    // Mix: dry/wet crossfade in [0..1]
+    const float mix01 = juce::jlimit(0.0f, 1.0f, mixPct * 0.01f);
+
+    // Phase 5: capture dry pre-process only when needed (reduces realtime load)
+    // Always operate on MAIN bus view (bus 0). When sidechain is enabled, 'buffer' may be stacked.
+    auto mainAudio = getBusBuffer (buffer, true, 0);
+
+    if (mix01 < 0.999f)
+        dryBuffer.makeCopyOf (mainAudio, true);
+
     // Feed pipeline targets (pipeline handles smoothing)
     pipeline.setControlTargets((double)thrDb, (double)ratioVal, (double)attackMs, (double)releaseMs);
 
-    // Run core DSP
-    pipeline.process(buffer);
+    // Run core DSP (sidechain-capable)
+    // Audio path is always 'mainAudio' (bus 0 view). Detector key uses sidechain bus (bus 1) only when enabled *and usable*.
+    bool usedExternalSC = false;
+
+    if (getBusCount (true) > 1)
+    {
+        if (auto* scBus = getBus (true, 1); scBus != nullptr && scBus->isEnabled())
+        {
+            // getBusBuffer returns a lightweight view — take by value to avoid lifetime/reference issues.
+            auto detectorIn = getBusBuffer (buffer, true, 1);
+
+            // Some hosts can report SC enabled while providing an empty/invalid view.
+            if (detectorIn.getNumChannels() > 0 && detectorIn.getNumSamples() == mainAudio.getNumSamples())
+            {
+                // If SC is enabled but effectively silent, fall back to internal detector
+                // to avoid "dead GR" when user forgot to route SC.
+                constexpr float scEps = 1.0e-5f;
+                float scMag = detectorIn.getMagnitude (0, 0, detectorIn.getNumSamples());
+                if (detectorIn.getNumChannels() > 1)
+                    scMag = juce::jmax (scMag, detectorIn.getMagnitude (1, 0, detectorIn.getNumSamples()));
+
+                if (scMag > scEps)
+                {
+                    pipeline.process (mainAudio, detectorIn);
+                    usedExternalSC = true;
+                }
+            }
+        }
+    }
+
+    if (! usedExternalSC)
+        pipeline.process (mainAudio);
 
     // UI GR meter tap: pipeline GR is positive dB; UI meter expects negative dB (0..-24)
     const float grDbPos = (float) pipeline.getMeterGainReductionDb();
@@ -132,8 +184,6 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     grMeterDb.store (grDbNeg, std::memory_order_relaxed);
 
     // Phase 5: post-pipeline controls (no topology change inside pipeline)
-    // Mix: dry/wet crossfade in [0..1]
-    const float mix01 = juce::jlimit(0.0f, 1.0f, mixPct * 0.01f);
 
     // Output gain (dB) + optional conservative auto-makeup (sealed)
     float makeupDb = 0.0f;
@@ -149,11 +199,19 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     const float outLin = juce::Decibels::decibelsToGain(totalOutDb);
 
     // Apply Mix + Output gain sample-accurate (no allocations)
-    const int chs = buffer.getNumChannels();
-    const int nSamp = buffer.getNumSamples();
+    const int chs = mainAudio.getNumChannels();
+    const int nSamp = mainAudio.getNumSamples();
+
+    // Fast paths to avoid unnecessary work + stale dry reads when mix is effectively 100% wet
+    if (mix01 >= 0.999f)
+    {
+        mainAudio.applyGain(outLin);
+        return;
+    }
+
     for (int ch = 0; ch < chs; ++ch)
     {
-        float* w = buffer.getWritePointer(ch);
+        float* w = mainAudio.getWritePointer(ch);
         const float* d = dryBuffer.getReadPointer(ch);
         for (int i = 0; i < nSamp; ++i)
         {
