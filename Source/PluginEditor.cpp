@@ -262,7 +262,7 @@ namespace
 
         // Background image behind panels (very subtle)
         {
-            const juce::File bgFile ("/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/6_Assets/Background.png");
+            const juce::File bgFile ("/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/6_Assets/Background1.png");
             if (bgFile.existsAsFile())
             {
                 auto bgImg = juce::ImageFileFormat::loadFrom (bgFile);
@@ -275,12 +275,36 @@ namespace
             }
         }
 
-        // Recessed wells (top zone + meter window)
-        auto drawWell = [&](juce::Rectangle<int> r, float radius)
+        // Top panel image (optional) — clipped into the top well only
+        juce::Image topWellImg;
         {
-            // Fill (slightly darker than base)
-            pg.setColour (juce::Colour (0xff0e0e0e));
-            pg.fillRoundedRectangle (r.toFloat(), radius);
+            const juce::File topFile ("/Volumes/CMB_SSD/CompassMemory/2_Projects/Compass Compressor/6_Assets/Mountain.png");
+            if (topFile.existsAsFile())
+            {
+                auto img = juce::ImageFileFormat::loadFrom (topFile);
+                if (img.isValid())
+                    topWellImg = img;
+            }
+        }
+
+        // Recessed wells (top zone + meter window)
+        auto drawWell = [&](juce::Rectangle<int> r, float radius, bool useTopImage)
+        {
+            // Fill (slightly darker than base) OR top image clipped to rounded rect
+            if (useTopImage && topWellImg.isValid())
+            {
+                juce::Graphics::ScopedSaveState ss (pg);
+                juce::Path clip; clip.addRoundedRectangle (r.toFloat(), radius);
+                pg.reduceClipRegion (clip);
+                pg.setOpacity (1.0f);
+                pg.drawImageWithin (topWellImg, r.getX(), r.getY(), r.getWidth(), r.getHeight(), juce::RectanglePlacement::stretchToFit);
+                pg.setOpacity (1.0f);
+            }
+            else
+            {
+                pg.setColour (juce::Colour (0xff0e0e0e));
+                pg.fillRoundedRectangle (r.toFloat(), radius);
+            }
 
             // Outer stroke (subtle)
             pg.setColour (juce::Colours::black.withAlpha (0.55f));
@@ -296,8 +320,8 @@ namespace
             pg.drawRoundedRectangle (inner.toFloat().translated (0.0f, 0.8f), radius - 1.0f, 1.0f);
         };
 
-        drawWell (juce::Rectangle<int> (UiMetrics::topX, UiMetrics::topY, UiMetrics::topW, UiMetrics::topH), 12.0f);
-        drawWell (juce::Rectangle<int> (UiMetrics::meterX, UiMetrics::meterY, UiMetrics::meterW, UiMetrics::meterH), 10.0f);
+        drawWell (juce::Rectangle<int> (UiMetrics::topX, UiMetrics::topY, UiMetrics::topW, UiMetrics::topH), 12.0f, true);
+        drawWell (juce::Rectangle<int> (UiMetrics::meterX, UiMetrics::meterY, UiMetrics::meterW, UiMetrics::meterH), 10.0f, false);
 
         // Micro-noise overlay (very subtle)
         {
@@ -669,8 +693,8 @@ void CompassCompressorAudioProcessorEditor::paint (juce::Graphics& g)
             g.drawFittedText (text, area, juce::Justification::centred, 1);
         };
 
-        const auto labelCol = juce::Colour ((juce::uint8)185, (juce::uint8)185, (juce::uint8)185);
-        const auto valueCol = juce::Colour ((juce::uint8)185, (juce::uint8)185, (juce::uint8)185);
+        const auto labelCol = juce::Colours::black;
+        const auto valueCol = juce::Colours::black;
 
         const int labelY = 168;
         const int valueY = 186;
@@ -704,24 +728,6 @@ void CompassCompressorAudioProcessorEditor::paint (juce::Graphics& g)
         drawKnobText (outputGainKnob);
     }
 
-
-    // Easter egg glow (≤0.5 s) on title click + Alt/Option
-    const auto now = juce::Time::getMillisecondCounter();
-    auto it = gEgg.find(this);
-    if (it != gEgg.end())
-    {
-        const auto dt = now - it->second.startMs;
-        if (dt < kEasterEggMs)
-        {
-            const float t = 1.0f - (float) dt / (float) kEasterEggMs;
-            g.setColour (juce::Colours::white.withAlpha (0.18f * t));
-            g.drawRoundedRectangle (title.toFloat().reduced (6.0f), 10.0f, 2.0f);
-        }
-        else
-        {
-            gEgg.erase (it);
-        }
-    }
 }
 
 void CompassCompressorAudioProcessorEditor::resized()
@@ -742,17 +748,5 @@ void CompassCompressorAudioProcessorEditor::resized()
 
 void CompassCompressorAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
-    const auto t = titleArea (getLocalBounds());
-    if (t.contains (e.getPosition()) && e.mods.isAltDown())
-    {
-        gEgg[this].startMs = juce::Time::getMillisecondCounter();
-        repaint (t.expanded (8));
-        juce::Timer::callAfterDelay ((int)kEasterEggMs, [safe = juce::Component::SafePointer<CompassCompressorAudioProcessorEditor>(this)]()
-        {
-            if (safe != nullptr)
-                safe->repaint();
-        });
-    }
-
     juce::AudioProcessorEditor::mouseDown (e);
 }
