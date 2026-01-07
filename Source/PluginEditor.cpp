@@ -202,7 +202,11 @@ namespace
 
     inline juce::Rectangle<int> titleArea (juce::Rectangle<int> bounds)
     {
-        return bounds.removeFromTop(kTitleH);
+        // Center the title between the top of the UI (y=0) and the top of the top panel (topY=93).
+        auto lane = bounds.removeFromTop (93);
+        auto title = lane.withHeight (kTitleH);
+        title.setCentre (lane.getCentre());
+        return title;
     }
 
     inline bool eggActive (const void* key, juce::uint32 now)
@@ -221,12 +225,12 @@ namespace
         static constexpr int H = 340;
 
         // Zones
-        static constexpr int topX = 20, topY = 56, topW = 800, topH = 170;
-        static constexpr int meterX = 20, meterY = 241, meterW = 800, meterH = 84;
+        static constexpr int topX = 20, topY = 93, topW = 800, topH = 138;
+        static constexpr int meterX = 20, meterY = 238, meterW = 800, meterH = 84;
 
         // Knobs
         static constexpr int D = 100;
-        static constexpr int knobY = 66;
+        static constexpr int knobY = 103;
         static constexpr int kX_thresh  = 51;
         static constexpr int kX_ratio   = 175;
         static constexpr int kX_attack  = 305;
@@ -268,7 +272,7 @@ namespace
                 auto bgImg = juce::ImageFileFormat::loadFrom (bgFile);
                 if (bgImg.isValid())
                 {
-                    pg.setOpacity (0.30f);
+                    pg.setOpacity (0.40f);
                     pg.drawImageWithin (bgImg, 0, 0, UiMetrics::W, UiMetrics::H, juce::RectanglePlacement::stretchToFit);
                     pg.setOpacity (1.0f);
                 }
@@ -321,7 +325,6 @@ namespace
         };
 
         drawWell (juce::Rectangle<int> (UiMetrics::topX, UiMetrics::topY, UiMetrics::topW, UiMetrics::topH), 12.0f, true);
-        drawWell (juce::Rectangle<int> (UiMetrics::meterX, UiMetrics::meterY, UiMetrics::meterW, UiMetrics::meterH), 10.0f, false);
 
         // Micro-noise overlay (very subtle)
         {
@@ -477,6 +480,8 @@ namespace
                                juce::Slider& slider) override
         {
             const auto bounds = juce::Rectangle<float> ((float)x, (float)y, (float)width, (float)height).reduced (1.0f);
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (bounds.toNearestInt());
             const float r = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
             const auto  c = bounds.getCentre();
 
@@ -519,8 +524,8 @@ namespace
             {
                 const float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
                 const float angleDraw = angle - juce::MathConstants<float>::halfPi;
-                const float lenIn  = r * 0.22f;
-                const float lenOut = r * 0.78f;
+                const float lenIn  = r * 0.36f;
+                const float lenOut = r * 0.68f;
 
                 const auto p1 = juce::Point<float> (c.x + std::cos (angleDraw) * lenIn,
                                                     c.y + std::sin (angleDraw) * lenIn);
@@ -534,6 +539,18 @@ namespace
                 // Indicator cap
                 g.setColour (juce::Colours::black.withAlpha (0.55f));
                 g.fillEllipse (p2.x - 2.0f, p2.y - 2.0f, 4.0f, 4.0f);
+
+                // Value inside knob (always visible; slightly stronger while dragging)
+                auto face = bounds.reduced (7.0f);
+                juce::String valText;
+                if (slider.getName() == "Ratio" || slider.getName() == "Attack")
+                    valText = juce::String (slider.getValue(), 2);
+                else
+                    valText = slider.getTextFromValue (slider.getValue());
+
+                g.setFont (juce::Font (dragging ? 13.0f : 12.0f, juce::Font::bold));
+                g.setColour (juce::Colours::white.withAlpha (dragging ? 0.82f : 0.62f));
+                g.drawFittedText (valText, face.toNearestInt(), juce::Justification::centred, 1);
             }
         }
 
@@ -619,12 +636,38 @@ outputGainKnob.setLookAndFeel (knobLnf.get());
     // Toggle Pass v1: custom component (paints pill+thumb + “AUTO”) and owns internal ToggleButton
     autoMakeupToggleComp = std::make_unique<AutoMakeupToggleComponent>();
 
+    auto setupLabel = [](juce::Label& l, const juce::String& t)
+    {
+        l.setText (t, juce::dontSendNotification);
+        l.setJustificationType (juce::Justification::centred);
+        l.setFont (juce::Font (12.0f, juce::Font::bold));
+        l.setColour (juce::Label::textColourId, juce::Colours::white.withAlpha (0.80f));
+
+        // DEBUG VISIBILITY: prove labels are drawn + not covered
+                l.setInterceptsMouseClicks (false, false);
+    };
+
+    setupLabel (thresholdLabel, "Thresh");
+    setupLabel (ratioLabel,     "Ratio");
+    setupLabel (attackLabel,    "Attack");
+    setupLabel (releaseLabel,   "Release");
+    setupLabel (mixLabel,       "Mix");
+    setupLabel (outputLabel,    "Output");
+
     addAndMakeVisible (thresholdKnob);
     addAndMakeVisible (ratioKnob);
     addAndMakeVisible (attackKnob);
     addAndMakeVisible (releaseKnob);
     addAndMakeVisible (mixKnob);
     addAndMakeVisible (outputGainKnob);
+
+    addAndMakeVisible (thresholdLabel);
+    addAndMakeVisible (ratioLabel);
+    addAndMakeVisible (attackLabel);
+    addAndMakeVisible (releaseLabel);
+    addAndMakeVisible (mixLabel);
+    addAndMakeVisible (outputLabel);
+
     addAndMakeVisible (*autoMakeupToggleComp);
     
     // APVTS attachments (locked parameter IDs)
@@ -640,6 +683,14 @@ outputGainKnob.setLookAndFeel (knobLnf.get());
     autoMakeupAttach = std::make_unique<APVTS::ButtonAttachment> (apvts, "auto_makeup",  autoMakeupToggleComp->getButton());
 
     resized();
+
+    // Ensure knob labels are not occluded by later-painted children
+    thresholdLabel.toFront (false);
+    ratioLabel.toFront (false);
+    attackLabel.toFront (false);
+    releaseLabel.toFront (false);
+    mixLabel.toFront (false);
+    outputLabel.toFront (false);
 
     // GR meter wiring is intentionally read-only and non-parameterized; value feed is expected
     // to be provided by the processor/pipeline (Phase 6 scope: UI only). Default to 0 dB.
@@ -674,60 +725,6 @@ void CompassCompressorAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xfff0f0f0));
     g.drawFittedText ("Compass Compressor", title, juce::Justification::centred, 1);
 
-    // Typography Pass v2 (Editor-owned): knob labels + values (absolute blueprint Y)
-    {
-        auto shortLabel = [](const juce::String& t)
-        {
-            if (t == "Threshold") return juce::String ("Thresh");
-            return t;
-        };
-
-        auto drawShadowedText = [&](const juce::String& text, juce::Rectangle<int> area,
-                                    float fontSize, juce::Colour col)
-        {
-            g.setFont (juce::Font ((float) fontSize));
-            g.setColour (juce::Colours::black.withAlpha (0.35f));
-            g.drawFittedText (text, area.translated (0, 1), juce::Justification::centred, 1);
-
-            g.setColour (col);
-            g.drawFittedText (text, area, juce::Justification::centred, 1);
-        };
-
-        const auto labelCol = juce::Colours::black;
-        const auto valueCol = juce::Colours::black;
-
-        const int labelY = 168;
-        const int valueY = 186;
-        const int labelH = 14;
-        const int valueH = 16;
-
-        auto drawKnobText = [&](juce::Slider& knob)
-        {
-            const auto kb = knob.getBounds();
-            auto labelR = juce::Rectangle<int> (kb.getX(), labelY, kb.getWidth(), labelH);
-            auto valueR = juce::Rectangle<int> (kb.getX(), valueY, kb.getWidth(), valueH);
-
-            const auto labelText = shortLabel (knob.getName());
-            juce::String valueText;
-            if (&knob == &ratioKnob || &knob == &attackKnob)
-                valueText = juce::String (knob.getValue(), 2);
-            else
-                valueText = knob.getTextFromValue (knob.getValue());
-
-            if (labelText.isNotEmpty())
-                drawShadowedText (labelText, labelR, 12.0f, labelCol);
-
-            drawShadowedText (valueText, valueR, 13.0f, valueCol);
-        };
-
-        drawKnobText (thresholdKnob);
-        drawKnobText (ratioKnob);
-        drawKnobText (attackKnob);
-        drawKnobText (releaseKnob);
-        drawKnobText (mixKnob);
-        drawKnobText (outputGainKnob);
-    }
-
 }
 
 void CompassCompressorAudioProcessorEditor::resized()
@@ -739,6 +736,19 @@ void CompassCompressorAudioProcessorEditor::resized()
     releaseKnob.setBounds    (UiMetrics::knobRect (UiMetrics::kX_release));
     mixKnob.setBounds        (UiMetrics::knobRect (UiMetrics::kX_mix));
     outputGainKnob.setBounds (UiMetrics::knobRect (UiMetrics::kX_output));
+
+    auto placeLabelUnder = [](juce::Label& l, const juce::Component& knob)
+    {
+        const auto kb = knob.getBounds();
+        l.setBounds (kb.getX(), kb.getBottom() + 4, kb.getWidth(), 14);
+    };
+
+    placeLabelUnder (thresholdLabel, thresholdKnob);
+    placeLabelUnder (ratioLabel,     ratioKnob);
+    placeLabelUnder (attackLabel,    attackKnob);
+    placeLabelUnder (releaseLabel,   releaseKnob);
+    placeLabelUnder (mixLabel,       mixKnob);
+    placeLabelUnder (outputLabel,    outputGainKnob);
 
     if (autoMakeupToggleComp)
         autoMakeupToggleComp->setBounds (UiMetrics::toggleX, UiMetrics::toggleY, UiMetrics::toggleW, UiMetrics::toggleH);

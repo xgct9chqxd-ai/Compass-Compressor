@@ -31,6 +31,13 @@ private:
     juce::Slider mixKnob;
     juce::Slider outputGainKnob;
 
+    juce::Label thresholdLabel;
+    juce::Label ratioLabel;
+    juce::Label attackLabel;
+    juce::Label releaseLabel;
+    juce::Label mixLabel;
+    juce::Label outputLabel;
+
     // Toggle Pass v1: custom component owns internal ToggleButton + paints “AUTO”
     std::unique_ptr<AutoMakeupToggleComponent> autoMakeupToggleComp;
 
