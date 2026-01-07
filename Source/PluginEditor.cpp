@@ -60,7 +60,7 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         auto outer = r.reduced (22.0f, 22.0f);
 
         // Build the bar track first (as before), then reserve a left label lane tied to this bar
-        auto track = outer.withHeight (12.0f);
+        auto track = outer.withHeight (10.0f);
         track.setCentre (outer.getCentre());
 
         const float labelW = 28.0f;
@@ -69,11 +69,11 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         auto labelR = track.removeFromLeft (labelW);
         track.removeFromLeft (gapW);
 
-        const float radius = 8.0f;
+        const float radius = 6.0f;
 
         // "GR" label — tied to the bar (left lane, vertically centered)
         g.setColour (juce::Colour (0xfff0f0f0).withAlpha (0.55f));
-        g.setFont (juce::Font (12.0f, juce::Font::bold));
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         g.drawFittedText ("GR", labelR.toNearestInt(), juce::Justification::centred, 1);
 
         // Track base (subtle)
@@ -94,16 +94,39 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         auto fill = track;
         fill.setWidth (track.getWidth() * amt);
 
-        // Color shift: muted green -> muted amber (broadcast-console subtlety)
-        const auto grGreen = juce::Colour ((juce::uint8) 80,  (juce::uint8)140, (juce::uint8)100);
-        const auto grAmber = juce::Colour ((juce::uint8)140, (juce::uint8)120, (juce::uint8) 80);
-        const float t = juce::jlimit (0.0f, 1.0f, (amt - 0.45f) / 0.55f);
-        auto barCol = grGreen.interpolatedWith (grAmber, t).withAlpha (0.78f);
+        // GR fill: subdued teal-blue with neutral grey tint (panel-aligned)
+        const auto baseBlue = juce::Colour (0xff003366); // deep blue
+        const auto peakTeal = juce::Colour (0xff00DDEE); // soft teal-cyan
+        const auto neutralGrey = juce::Colour (0xff2A2E33); // panel-adjacent grey
+
+        const float t = juce::jlimit (0.0f, 1.0f, amt);
+
+        // Pull both ends slightly toward neutral grey for cohesion with panel
+        const auto baseMuted = baseBlue.interpolatedWith (neutralGrey, 0.20f);
+        const auto peakMuted = peakTeal.interpolatedWith (neutralGrey, 0.25f)
+                                        .interpolatedWith (baseMuted, 0.15f);
 
         if (fill.getWidth() > 0.5f)
         {
-            g.setColour (barCol);
+            // Outer glow: reduced bloom + tighter spread (less fog)
+            const auto glowCol = baseMuted.interpolatedWith (peakMuted, t);
+            g.setColour (glowCol.withAlpha (0.16f));
+            g.fillRoundedRectangle (fill.expanded (2.6f, 2.2f), radius + 2.2f);
+
+            g.setColour (glowCol.withAlpha (0.08f));
+            g.fillRoundedRectangle (fill.expanded (4.2f, 3.4f), radius + 3.4f);
+
+            // Main horizontal gradient (dark -> brighter toward tip), slightly calmer
+            juce::ColourGradient grad (baseMuted.withAlpha (0.58f), fill.getX(), fill.getCentreY(),
+                                       peakMuted.withAlpha (0.66f), fill.getRight(), fill.getCentreY(), false);
+            g.setGradientFill (grad);
             g.fillRoundedRectangle (fill, radius);
+
+            // Edge blend: keep it, but reduce strength + spread
+            juce::ColourGradient edgeGrad (baseMuted.withAlpha (0.05f), fill.getX(), fill.getCentreY(),
+                                           peakMuted.withAlpha (0.06f), fill.getRight(), fill.getCentreY(), false);
+            g.setGradientFill (edgeGrad);
+            g.fillRoundedRectangle (fill.expanded (0.6f, 0.5f), radius + 0.5f);
         }
         // Ticks (very subtle) - above the meter so they don't clash with value readout
         g.setColour (juce::Colours::white.withAlpha (0.04f));
@@ -126,7 +149,7 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
                                                    (int) std::round (track.getWidth()),
                                                    16);
             g.setColour (juce::Colours::white.withAlpha (0.55f));
-            g.setFont (juce::Font (11.0f));
+            g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::plain)));
             g.drawFittedText (juce::String (dbReadout, 1) + " dB", valR, juce::Justification::centred, 1);
         }
 
@@ -183,12 +206,12 @@ private:
 
 namespace
 {
-    constexpr int kPad     = 18;
-    constexpr int kKnobDia = 92;
-    constexpr int kKnobTextH = 18;
+    [[maybe_unused]] constexpr int kPad     = 18;
+    [[maybe_unused]] constexpr int kKnobDia = 92;
+    [[maybe_unused]] constexpr int kKnobTextH = 18;
 
-    constexpr int kMeterH  = 18;
-    constexpr int kToggleH = 18;
+    [[maybe_unused]] constexpr int kMeterH  = 18;
+    [[maybe_unused]] constexpr int kToggleH = 18;
     constexpr int kTitleH  = 48;
 
     constexpr juce::uint32 kEasterEggMs = 500;
@@ -209,7 +232,7 @@ namespace
         return title;
     }
 
-    inline bool eggActive (const void* key, juce::uint32 now)
+    [[maybe_unused]] inline bool eggActive (const void* key, juce::uint32 now)
     {
         auto it = gEgg.find(key);
         if (it == gEgg.end()) return false;
@@ -272,7 +295,7 @@ namespace
                 auto bgImg = juce::ImageFileFormat::loadFrom (bgFile);
                 if (bgImg.isValid())
                 {
-                    pg.setOpacity (0.40f);
+                    pg.setOpacity (0.22f);
                     pg.drawImageWithin (bgImg, 0, 0, UiMetrics::W, UiMetrics::H, juce::RectanglePlacement::stretchToFit);
                     pg.setOpacity (1.0f);
                 }
@@ -300,15 +323,38 @@ namespace
                 juce::Graphics::ScopedSaveState ss (pg);
                 juce::Path clip; clip.addRoundedRectangle (r.toFloat(), radius);
                 pg.reduceClipRegion (clip);
-                pg.setOpacity (1.0f);
-                pg.drawImageWithin (topWellImg, r.getX(), r.getY(), r.getWidth(), r.getHeight(), juce::RectanglePlacement::stretchToFit);
+
+                // Frosted underlay: blur ONLY inside the well (outer background remains sharp)
+                juce::Image wellImg (juce::Image::PixelFormat::RGB, r.getWidth(), r.getHeight(), false);
+                {
+                    juce::Graphics wg (wellImg);
+                    wg.drawImageWithin (topWellImg, 0, 0, r.getWidth(), r.getHeight(), juce::RectanglePlacement::stretchToFit);
+                }
+
+                juce::ImageConvolutionKernel k (31);
+                k.createGaussianBlur (24.0f);
+                k.applyToImage (wellImg, wellImg, juce::Rectangle<int> (0, 0, r.getWidth(), r.getHeight()));
+
+                pg.setOpacity (0.25f);
+                pg.drawImageAt (wellImg, r.getX(), r.getY());
                 pg.setOpacity (1.0f);
             }
             else
             {
-                pg.setColour (juce::Colour (0xff0e0e0e));
+                // Glass base when no image is present
+                pg.setColour (juce::Colour (0xff0e0e0e).withAlpha (0.25f));
                 pg.fillRoundedRectangle (r.toFloat(), radius);
             }
+
+            // Subtle glass tint (ties panel to night-sky palette)
+            pg.setColour (juce::Colour (0xff0A1A2F).withAlpha (0.08f));
+            pg.fillRoundedRectangle (r.toFloat(), radius);
+
+            // Soft edge glow (very subtle, night-sky tint)
+            pg.setColour (juce::Colour (0xff0A1A2F).withAlpha (0.10f));
+            pg.drawRoundedRectangle (r.toFloat().expanded (1.5f).reduced (0.5f), radius + 1.5f, 2.0f);
+            pg.setColour (juce::Colour (0xff0A1A2F).withAlpha (0.06f));
+            pg.drawRoundedRectangle (r.toFloat().expanded (3.0f).reduced (0.5f), radius + 3.0f, 3.0f);
 
             // Outer stroke (subtle)
             pg.setColour (juce::Colours::black.withAlpha (0.55f));
@@ -399,24 +445,46 @@ namespace
             const bool on = button.getToggleState();
             const float t = on ? 1.0f : 0.0f;
 
-            // Tokens (match existing plate/knob material family)
-            const auto trackOff = juce::Colour (0xff0e0e0e);
-            const auto trackOn  = juce::Colour (0xff2f7dff).withAlpha (0.22f);
-            const auto stroke   = juce::Colours::black.withAlpha (0.55f);
+            // Tokens (meter + panel aligned)
+            const auto trackOff    = juce::Colour (0xff0e0e0e);
+            const auto baseBlue    = juce::Colour (0xff003366);   // meter-family base
+            const auto peakTeal    = juce::Colour (0xff00DDEE);   // meter-family peak
+            const auto neutralGrey = juce::Colour (0xff2A2E33);   // panel-adjacent grey
 
-            const auto thumbFill = juce::Colour (0xff1a1a1a);
-            const auto thumbStroke = juce::Colours::black.withAlpha (0.60f);
+            // Grey-tinted teal (matches GR meter family) — slightly more grey, slightly less “neon”
+            const auto onBase = baseBlue.interpolatedWith (neutralGrey, 0.30f);
+            const auto onPeak = peakTeal.interpolatedWith (neutralGrey, 0.36f).interpolatedWith (onBase, 0.22f);
+
+            // OFF polish: faint teal-ish definition so it doesn't disappear (slightly subtler)
+            const auto offStroke = juce::Colour (0xff001a22).withAlpha (0.22f);
+
+            // ON stroke stays subtle and grounded
+            const auto stroke = juce::Colours::black.withAlpha (0.55f);
 
             const float radius = (float) v.getHeight() * 0.5f;
             auto track = v.toFloat();
 
-            auto trackCol = trackOff.interpolatedWith (trackOn, t);
+            // Track fill (back off glow/brightness slightly)
+            const auto trackCol = trackOff.interpolatedWith (onBase.withAlpha (0.18f), t);
             g.setColour (trackCol);
             g.fillRoundedRectangle (track, radius);
 
-            g.setColour (stroke);
+            // ON glow (subtle, diffused like GR meter; dialed back)
+            if (on)
+            {
+                const auto glowCol = onBase.interpolatedWith (onPeak, 0.65f);
+                g.setColour (glowCol.withAlpha (0.18f));
+                g.fillRoundedRectangle (track.expanded (3.8f, 3.2f), radius + 3.2f);
+
+                g.setColour (glowCol.withAlpha (0.10f));
+                g.fillRoundedRectangle (track.expanded (6.2f, 5.0f), radius + 5.0f);
+            }
+
+            // Stroke (OFF gets faint teal definition; ON uses normal stroke)
+            g.setColour (on ? stroke : offStroke);
             g.drawRoundedRectangle (track.reduced (0.5f), radius, 1.0f);
 
+            // Inner highlight/shadow (kept in the same material family)
             auto inner = v.reduced (2).toFloat();
             g.setColour (juce::Colours::white.withAlpha (0.06f));
             g.drawRoundedRectangle (inner.translated (0.0f, -0.6f), radius - 2.0f, 1.0f);
@@ -434,7 +502,20 @@ namespace
 
             juce::Rectangle<float> thumb ((float) tx, (float) ty, (float) thumbD, (float) thumbD);
 
-            g.setColour (thumbFill);
+            // Thumb: OFF stays frosted/dark; ON becomes the brighter indicator in meter hue family
+            const auto thumbOffFill   = juce::Colour (0xff1a1a1a);
+            const auto thumbOnFill    = onBase.interpolatedWith (onPeak, 0.70f).withAlpha (0.92f);
+            const auto thumbStroke    = juce::Colours::black.withAlpha (0.60f);
+
+            if (on)
+            {
+                // Thumb glow (very subtle)
+                const auto tg = onBase.interpolatedWith (onPeak, 0.75f);
+                g.setColour (tg.withAlpha (0.14f));
+                g.fillEllipse (thumb.expanded (3.0f, 3.0f));
+            }
+
+            g.setColour (on ? thumbOnFill : thumbOffFill);
             g.fillEllipse (thumb);
 
             g.setColour (thumbStroke);
@@ -444,7 +525,7 @@ namespace
             g.drawEllipse (thumb.reduced (2.5f).translated (-0.6f, -0.8f), 1.0f);
 
             // “AUTO” text (internal)
-            g.setFont (juce::Font (11.0f));
+            g.setFont (juce::Font (juce::FontOptions (11.0f)));
             g.setColour (juce::Colours::white.withAlpha (on ? 0.82f : 0.66f));
 
             auto textArea = v;
@@ -548,7 +629,7 @@ namespace
                 else
                     valText = slider.getTextFromValue (slider.getValue());
 
-                g.setFont (juce::Font (dragging ? 13.0f : 12.0f, juce::Font::bold));
+                g.setFont (juce::Font (juce::FontOptions (dragging ? 13.0f : 12.0f, juce::Font::bold)));
                 g.setColour (juce::Colours::white.withAlpha (dragging ? 0.82f : 0.62f));
                 g.drawFittedText (valText, face.toNearestInt(), juce::Justification::centred, 1);
             }
@@ -640,7 +721,7 @@ outputGainKnob.setLookAndFeel (knobLnf.get());
     {
         l.setText (t, juce::dontSendNotification);
         l.setJustificationType (juce::Justification::centred);
-        l.setFont (juce::Font (12.0f, juce::Font::bold));
+        l.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         l.setColour (juce::Label::textColourId, juce::Colours::white.withAlpha (0.80f));
 
         // DEBUG VISIBILITY: prove labels are drawn + not covered
@@ -710,20 +791,7 @@ void CompassCompressorAudioProcessorEditor::paint (juce::Graphics& g)
     if (backgroundPlate.isValid()) g.drawImageAt (backgroundPlate, 0, 0);
     else g.fillAll (juce::Colour (0xff121212));
 
-    // Title
-    auto title = titleArea (bounds);
-
-    // Title: larger, warmer, subtle shadow (JUCE will fall back if font unavailable)
-    const juce::Font titleFont ("Inter", 24.0f, juce::Font::bold);
-    g.setFont (titleFont);
-
-    // Shadow pass
-    g.setColour (juce::Colours::black.withAlpha (0.35f));
-    g.drawFittedText ("Compass Compressor", title.translated (0, 1), juce::Justification::centred, 1);
-
-    // Main pass
-    g.setColour (juce::Colour (0xfff0f0f0));
-    g.drawFittedText ("Compass Compressor", title, juce::Justification::centred, 1);
+    // Title intentionally removed for layout evaluation
 
 }
 

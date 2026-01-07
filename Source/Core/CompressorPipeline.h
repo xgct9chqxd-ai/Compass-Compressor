@@ -204,12 +204,12 @@ hybridEnvelopeEngine.reset();
         // View with exact current block length to avoid processing tail garbage/zeros
         juce::AudioBuffer<float> detView (det.getArrayOfWritePointers(), mainChs, 0, nSamp);
 
-        auto onePoleBlock = [](double y, double x, double tauSec, int nSamp, double fs)
+        auto onePoleBlock = [](double y, double x, double tauSec, int nSamp_block, double fs)
         {
             if (!std::isfinite(y)) y = 0.0;
             if (!std::isfinite(x)) x = y;
-            if (tauSec <= 0.0 || nSamp <= 0 || fs <= 0.0) return x;
-            const double a = std::exp(-(double)nSamp / (tauSec * fs));
+            if (tauSec <= 0.0 || nSamp_block <= 0 || fs <= 0.0) return x;
+            const double a = std::exp(-(double)nSamp_block / (tauSec * fs));
             return a * y + (1.0 - a) * x;
         };
         auto clamp01_local = [](double x)
@@ -312,7 +312,7 @@ lowEndGuard.setCurrentRatio(userRatio);
             // Invert smoothstep(0..1) ~= 3x^2 - 2x^3 via deterministic Newton iterations
             auto smoothstepInv01 = [](double y)
             {
-                auto clamp01_local = [](double x)
+                auto clamp01_ss = [](double x)
                 {
                     if (!std::isfinite(x)) return 0.0;
                     if (x < 0.0) return 0.0;
@@ -320,7 +320,7 @@ lowEndGuard.setCurrentRatio(userRatio);
                     return x;
                 };
 
-                y = clamp01_local(y);
+                y = clamp01_ss(y);
                 // Start near y (reasonable for monotonic)
                 double x = y;
 
@@ -335,9 +335,9 @@ lowEndGuard.setCurrentRatio(userRatio);
                         break;
 
                     x = x - (f / fp);
-                    x = clamp01_local(x);
+                    x = clamp01_ss(x);
                 }
-                return clamp01_local(x);
+                return clamp01_ss(x);
             };
 
             // Map ms -> normalized using inverse of baseReleaseMs = lerp(40,1200,smooth01(R))
