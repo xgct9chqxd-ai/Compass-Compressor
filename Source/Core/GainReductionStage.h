@@ -25,13 +25,13 @@ struct GainReductionStage
 
     // Phase 3B.2: apply GR linear to audio (sample-accurate via within-block ramp).
     void process (juce::AudioBuffer<float>& buffer)
-    {
-        const int numCh = buffer.getNumChannels();
-        const int numS  = buffer.getNumSamples();
-        if (numCh <= 0 || numS <= 0)
-            return;
+{
+    const int numCh = buffer.getNumChannels();
+    const int numS  = buffer.getNumSamples();
+    if (numCh <= 0 || numS <= 0)
+        return;
 
-        // Target GR (linear), sanitized to (0, 1]
+    juce::ScopedNoDenormals noDenormals;// Target GR (linear), sanitized to (0, 1]
         double target = grLin;
         if (!std::isfinite(target) || target <= 0.0 || target > 1.0)
             target = 1.0;

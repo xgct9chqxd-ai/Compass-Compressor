@@ -7,7 +7,10 @@
 
 struct TransientGuard
 {
-    void prepare (double, int) {}
+    void prepare (double sr, int)
+    {
+        sampleRateHz = (sr > 0.0 ? sr : 48000.0);
+    }
     void reset()
     {
         transientLin = 0.0;

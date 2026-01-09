@@ -34,11 +34,11 @@ struct LowEndGuard
         // Dynamic sidechain HPF recommendation: 60–150 Hz
         dynamicHpfHz = 60.0 + 90.0 * shaped;
 
-        // Release tightening recommendation (multiplier): 1.0 → 0.65 as dominance increases
+        // Release lengthening recommendation (multiplier): 1.0 → 1.35 as dominance increases
         // Downstream systems may apply: effectiveReleaseMs = currentReleaseMs * releaseAdjustFactor
-        releaseAdjustFactor = 1.0 - 0.35 * shaped;
-        if (!std::isfinite(releaseAdjustFactor) || releaseAdjustFactor < 0.65) releaseAdjustFactor = 0.65;
-        if (releaseAdjustFactor > 1.0) releaseAdjustFactor = 1.0;
+        releaseAdjustFactor = 1.0 + 0.35 * shaped;
+        if (!std::isfinite(releaseAdjustFactor) || releaseAdjustFactor < 1.0) releaseAdjustFactor = 1.0;
+        if (releaseAdjustFactor > 1.35) releaseAdjustFactor = 1.35;
 
         // Ratio softening bias (negative): 0.0 → -0.30 as dominance increases
         // Downstream may interpret as: ratio = ratio * (1.0 + ratioBias)

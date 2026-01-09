@@ -22,6 +22,13 @@ struct DetectorCore
 
         // Low-end dominance smoothing (sealed for Phase 4C.1): τ = 30 ms
         setOnePoleTimeConstantSeconds(dominanceSmoother, 0.030);
+
+        // Pre-size per-channel detector states (fail-soft if host uses >2ch and prepare is not channel-aware)
+        if (hpfLpState.empty())      hpfLpState.resize(2, 0.0);
+        if (lowLpState.empty())      lowLpState.resize(2, 0.0);
+        if (peakEnvState.empty())    peakEnvState.resize(2, 0.0);
+        if (rmsSqState.empty())      rmsSqState.resize(2, 0.0);
+
         reset();
     }
 
@@ -46,6 +53,10 @@ struct DetectorCore
         lowEndDominance01 = 0.0;
         dominanceSmoother.reset(0.0);
         for (auto& z : lowLpState) z = 0.0;
+
+        // Per-sample detector states
+        for (auto& z : peakEnvState) z = 0.0;
+        for (auto& z : rmsSqState)   z = 0.0;
     }
 
     // Phase 2: Peak/RMS + detector blend math (α/β/γ) is implemented.
@@ -62,12 +73,12 @@ struct DetectorCore
 
 
         // Detector-only HPF: affects measurement only (no audio-path change)
-        if ((int)hpfLpState.size() < numCh)
-            hpfLpState.resize((size_t)numCh, 0.0);
-
-        // Low-end dominance LP state (measurement path only)
-        if ((int)lowLpState.size() < numCh)
-            lowLpState.resize((size_t)numCh, 0.0);
+        // Hard rule: no allocations in audio thread. If channel count exceeds prepared state, fail-soft.
+        const bool haveHpfState   = ((int)hpfLpState.size()   >= numCh);
+        const bool haveLowState   = ((int)lowLpState.size()   >= numCh);
+        const bool havePeakState  = ((int)peakEnvState.size() >= numCh);
+        const bool haveRmsState   = ((int)rmsSqState.size()   >= numCh);
+        const bool allowStatefulMeasurement = (haveHpfState && haveLowState && havePeakState && haveRmsState);
 
         // Smooth cutoff (Hz). 0 => disabled.
         detectorHpfCutoffHzSmoothed = hpfCutoffSmoother.process(detectorHpfCutoffHzTarget);
@@ -75,49 +86,109 @@ struct DetectorCore
         const bool hpfEnabled = (std::isfinite(fc) && fc > 0.0);
         const double fs = (sampleRate > 0.0 ? sampleRate : 48000.0);
         const double gHpf = hpfEnabled ? (1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * fc / fs)) : 0.0;
-        // Compute peak + RMS over the block (linear domain), across all channels.
-        double peak = 0.0;
-        long double sumSq = 0.0L;
-        const long double invN = 1.0L / (long double)(numCh * numS);
 
         // Low-end dominance measurement (detector-only): one-pole LP @ 120 Hz on measurement signal
         long double sumSqLow = 0.0L;
         constexpr double kLowFcHz = 120.0;
         const double gLow = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * kLowFcHz / fs);
 
-                for (int ch = 0; ch < numCh; ++ch)
+        // Per-sample detector ballistics (sealed)
+        constexpr double kPeakAttackTauS  = 0.001; // 1 ms
+        constexpr double kPeakReleaseTauS = 0.050; // 50 ms
+        const double gPeakAttack  = 1.0 - std::exp(-1.0 / (kPeakAttackTauS  * fs));
+        const double gPeakRelease = 1.0 - std::exp(-1.0 / (kPeakReleaseTauS * fs));
+
+        constexpr double kRmsTauS = 0.010; // 10 ms EMA of square
+        const double gRms = 1.0 - std::exp(-1.0 / (kRmsTauS * fs));
+
+        // Accumulators for block-rate readouts
+        double maxPeakBlock = 0.0;
+        long double sumRmsInst = 0.0L;
+        long double sumDetector = 0.0L;
+
+        // Precompute A->(alpha,beta,gamma) once per block (A is already very fast-smoothed)
+        attackNormSmoothed = aSmoother.process(clamp01(attackNormTarget));
+        const double A = clamp01(attackNormSmoothed);
+        const double alpha = 0.40 + 0.20 * (A * A);
+        const double beta  = 0.60 - 0.25 * A;
+        const double gamma = 0.10 + 0.35 * (1.0 - A);
+
+        for (int i = 0; i < numS; ++i)
         {
-            const float* x = buffer.getReadPointer(ch);
-            double lp = hpfLpState[(size_t)ch];
-            double lowLp = lowLpState[(size_t)ch];
-            for (int i = 0; i < numS; ++i)
+            double peakAcrossCh = 0.0;
+            long double rmsSqMean = 0.0L;
+
+            for (int ch = 0; ch < numCh; ++ch)
             {
+                const float* x = buffer.getReadPointer(ch);
+
+                // Fail-soft: if we don't have prepared state, never index vectors (prevents OOB crashes in hosts).
+                double lp      = 0.0;
+                double lowLp   = 0.0;
+                double peakEnv = 0.0;
+                double rmsSq   = 0.0;
+
+                if (allowStatefulMeasurement)
+                {
+                    lp      = hpfLpState[(size_t)ch];
+                    lowLp   = lowLpState[(size_t)ch];
+                    peakEnv = peakEnvState[(size_t)ch];
+                    rmsSq   = rmsSqState[(size_t)ch];
+                }
+
                 const double v = (double) x[i];
 
-                // Measurement signal: optional HPF (y = x - lp)
-                if (hpfEnabled)
-                {
+                // Measurement signal: optional HPF (stateful only if prepared)
+                if (hpfEnabled && allowStatefulMeasurement)
                     lp += gHpf * (v - lp);
-                }
-                const double y = hpfEnabled ? (v - lp) : v;
+
+                const double y = (hpfEnabled && allowStatefulMeasurement) ? (v - lp) : v;
 
                 // Low-end band proxy (measurement only): one-pole low-pass of y
                 lowLp += gLow * (y - lowLp);
                 sumSqLow += (long double)lowLp * (long double)lowLp;
 
-                const double a = std::abs(y);
-                if (a > peak) peak = a;
-                sumSq += (long double)y * (long double)y;
+                // Per-sample peak envelope (abs -> attack/release)
+                const double absY = std::abs(y);
+                const double gP = (absY > peakEnv) ? gPeakAttack : gPeakRelease;
+                peakEnv += gP * (absY - peakEnv);
+
+                // Per-sample RMS (EMA of square)
+                const double sq = y * y;
+                rmsSq += gRms * (sq - rmsSq);
+
+                if (peakEnv > peakAcrossCh) peakAcrossCh = peakEnv;
+                rmsSqMean += (long double)rmsSq;
+
+                if (allowStatefulMeasurement)
+                {
+                    hpfLpState[(size_t)ch]    = lp;
+                    lowLpState[(size_t)ch]    = lowLp;
+                    peakEnvState[(size_t)ch]  = peakEnv;
+                    rmsSqState[(size_t)ch]    = rmsSq;
+                }
             }
-            hpfLpState[(size_t)ch] = lp;
-            lowLpState[(size_t)ch] = lowLp;
+
+            rmsSqMean *= (1.0L / (long double)numCh);
+            const double rmsAcrossCh = std::sqrt((double)rmsSqMean);
+
+            const double det = alpha * peakAcrossCh + beta * rmsAcrossCh + gamma * transientLin;
+            const double detSafe = (std::isfinite(det) && det > 0.0) ? det : 0.0;
+
+            sumDetector += (long double)detSafe;
+            sumRmsInst  += (long double)rmsAcrossCh;
+
+            if (peakAcrossCh > maxPeakBlock) maxPeakBlock = peakAcrossCh;
         }
 
-        peakLin = peak;
-        rmsLin  = std::sqrt((double)(sumSq * invN));
+        // Block-rate readouts (stable across buffer sizes)
+        peakLin = maxPeakBlock;
+        rmsLin  = (double)(sumRmsInst / (long double)numS);
+        detectorLin = (double)(sumDetector / (long double)numS);
 
         // Low-end dominance01 (detector-only): ratio of low-band RMS to total RMS, shaped by pow(·, 0.7)
         constexpr double kEps = 1e-12;
+        const long double invN = 1.0L / (long double)(numCh * numS);
         const double lowRms = std::sqrt((double)(sumSqLow * invN));
         const double totalRms = rmsLin;
         double ratio = lowRms / std::max(totalRms, kEps);
@@ -130,20 +201,6 @@ struct DetectorCore
         lowEndDominance01 = dominanceSmoother.process(domRaw);
         if (!std::isfinite(lowEndDominance01)) lowEndDominance01 = 0.0;
         lowEndDominance01 = clamp01(lowEndDominance01);
-
-        // A = attack_normalized ∈ [0,1], one-pole smoothed τ = 250 µs
-        attackNormSmoothed = aSmoother.process(clamp01(attackNormTarget));
-
-        const double A = clamp01(attackNormSmoothed);
-
-        // Detector blend coefficients (exact, from DSP & Math Constitution)
-        const double alpha = 0.40 + 0.20 * (A * A);
-        const double beta  = 0.60 - 0.25 * A;
-        const double gamma = 0.10 + 0.35 * (1.0 - A);
-
-        // detector = α*peak + β*rms + γ*transient
-        // NOTE: transientLin is currently an injected slot pending an explicit transient detector definition.
-        detectorLin = alpha * peakLin + beta * rmsLin + gamma * transientLin;
 
         // Safety: prevent NaNs/Infs from propagating
         if (!std::isfinite(detectorLin) || detectorLin < 0.0)
@@ -267,6 +324,11 @@ private:
     OnePole dominanceSmoother;
     std::vector<double> lowLpState;
     double lowEndDominance01 = 0.0;
+
+    // Per-sample detector states (per-channel)
+    std::vector<double> peakEnvState;
+    std::vector<double> rmsSqState;
+
     // Placeholder normalized feeds for later phases / weighting logic
     double releaseNorm = 0.0; // R
     double crestNorm   = 0.0; // C

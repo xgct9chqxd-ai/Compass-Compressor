@@ -139,8 +139,18 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     // Always operate on MAIN bus view (bus 0). When sidechain is enabled, 'buffer' may be stacked.
     auto mainAudio = getBusBuffer (buffer, true, 0);
 
+    bool dryValid = false;
     if (mix01 < 0.999f)
-        dryBuffer.makeCopyOf (mainAudio, true);
+    {
+        const int nMain = mainAudio.getNumSamples();
+        if (nMain <= dryBuffer.getNumSamples() && dryBuffer.getNumChannels() >= mainAudio.getNumChannels())
+        {
+            for (int ch = 0; ch < mainAudio.getNumChannels(); ++ch)
+                dryBuffer.copyFrom (ch, 0, mainAudio, ch, 0, nMain);
+            dryValid = true;
+        }
+        // Never resize/allocate here (audio thread). If block size exceeds prealloc, fail-soft.
+    }
 
     // Feed pipeline targets (pipeline handles smoothing)
     pipeline.setControlTargets((double)thrDb, (double)ratioVal, (double)attackMs, (double)releaseMs);
@@ -203,7 +213,8 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     const int nSamp = mainAudio.getNumSamples();
 
     // Fast paths to avoid unnecessary work + stale dry reads when mix is effectively 100% wet
-    if (mix01 >= 0.999f)
+    // If dry couldn't be captured safely (no allocations), fail-soft to fully-wet.
+    if (mix01 >= 0.999f || ! dryValid)
     {
         mainAudio.applyGain(outLin);
         return;
