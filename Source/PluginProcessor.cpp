@@ -188,10 +188,14 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     if (! usedExternalSC)
         pipeline.process (mainAudio);
 
-    // UI GR meter tap: pipeline GR is positive dB; UI meter expects negative dB (0..-24)
-    const float grDbPos = (float) pipeline.getMeterGainReductionDb();
-    const float grDbNeg = -juce::jlimit (0.0f, 60.0f, (std::isfinite(grDbPos) ? grDbPos : 0.0f));
-    grMeterDb.store (grDbNeg, std::memory_order_relaxed);
+    //// [CC:SAFE] GR Meter Tap Normalize
+    // UI GR meter tap: store negative dB (0..-60), robust to pipeline meter sign
+    constexpr float kGrMeterClampMaxDb = 60.0f;
+
+    const float grRaw = (float) pipeline.getMeterGainReductionDb();
+    const float grAbs = juce::jlimit (0.0f, kGrMeterClampMaxDb,
+                                      std::abs (std::isfinite (grRaw) ? grRaw : 0.0f));
+    grMeterDb.store (-grAbs, std::memory_order_relaxed);
 
     // Phase 5: post-pipeline controls (no topology change inside pipeline)
 
