@@ -14,6 +14,10 @@ static void setRotary(juce::Slider &s)
     s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
 
+    //// [CC:UI] Floating Knob Value Label
+    s.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    s.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+
     // [CML:UI] Shift Fine Drag Modifier matching Compass ecosystem spec
     s.setVelocityBasedMode(false);
     s.setVelocityModeParameters(0.35, 1, 0.0, true, juce::ModifierKeys::shiftModifier);
@@ -181,15 +185,62 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         //// [CC:UI] GR Meter Pill Heat Gradient
         constexpr float kPadXPx            = 12.0f;
         constexpr float kPadYPx            = 12.0f;
-        constexpr float kGapPx             = 2.0f;
-        constexpr float kMinBarWPx         = 3.0f;
-        constexpr int   kBarsMax           = 140;
+        constexpr float kGapPx             = 3.0f;
+        constexpr float kMinBarWPx         = 6.0f;
+        constexpr int   kBarsMax           = 40;
         constexpr float kMeterRangeDb      = 24.0f;
         constexpr float kCornerRadiusPx    = 2.0f;
         constexpr float kLitAlpha          = 0.52f;
-        constexpr float kUnlitAlpha        = 0.10f;
+        constexpr float kUnlitAlpha        = 0.06f;
 
-        auto ledArea = getLocalBounds().toFloat().reduced(kPadXPx, kPadYPx);
+        //// [CC:UI] GR Meter Screen Background
+        g.fillAll (juce::Colour (0xFF050505));
+
+        //// [CC:UI] GR Meter Header Zone Reserve
+        const float headerHeight = 20.0f;
+
+        auto ledArea = getLocalBounds().toFloat().reduced (kPadXPx, kPadYPx);
+
+        const auto headerArea = ledArea.withHeight (headerHeight);
+        const auto barsArea   = ledArea.withTrimmedTop (headerHeight);
+
+        //// [CC:UI] GR Meter Glass Well + Inner Shadow
+        constexpr float kWellRadiusPx        = 4.0f;
+        constexpr float kWellFillAlpha       = 0.28f;
+        constexpr float kInnerShadowTopA     = 0.45f;
+        constexpr float kInnerShadowBotA     = 0.35f;
+        constexpr float kInnerShadowFracH    = 0.18f;
+
+        const auto glassWell = ledArea;
+        g.setColour (juce::Colours::black.withAlpha (kWellFillAlpha));
+        g.fillRoundedRectangle (glassWell, kWellRadiusPx);
+
+        {
+            g.saveState();
+            g.reduceClipRegion (glassWell.toNearestInt());
+
+            const float shH = juce::jmax (2.0f, std::round (glassWell.getHeight() * kInnerShadowFracH));
+
+            const auto topSh = glassWell.withHeight (shH);
+            juce::ColourGradient topG (juce::Colours::black.withAlpha (kInnerShadowTopA),
+                                       topSh.getCentreX(), topSh.getY(),
+                                       juce::Colours::transparentBlack,
+                                       topSh.getCentreX(), topSh.getBottom(),
+                                       false);
+            g.setGradientFill (topG);
+            g.fillRect (topSh);
+
+            const auto botSh = glassWell.withY (glassWell.getBottom() - shH).withHeight (shH);
+            juce::ColourGradient botG (juce::Colours::transparentBlack,
+                                       botSh.getCentreX(), botSh.getY(),
+                                       juce::Colours::black.withAlpha (kInnerShadowBotA),
+                                       botSh.getCentreX(), botSh.getBottom(),
+                                       false);
+            g.setGradientFill (botG);
+            g.fillRect (botSh);
+
+            g.restoreState();
+        }
 
         const float ledW  = juce::jmax (0.0f, ledArea.getWidth());
         const float denom = (kMinBarWPx + kGapPx);
@@ -205,9 +256,9 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         const juce::Colour cLow  = juce::Colour (0xFF602020);
         const juce::Colour cHigh = juce::Colour (0xFFFFD700);
 
-        const float x0 = std::round (ledArea.getX());
-        const float y0 = std::round (ledArea.getY());
-        const float h  = std::round (ledArea.getHeight());
+        const float x0 = std::round (barsArea.getX());
+        const float y0 = std::round (barsArea.getY());
+        const float h  = std::round (barsArea.getHeight());
 
         float x = x0;
         for (int i = 0; i < bars; ++i)
@@ -227,27 +278,50 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         }
 
         //// [CC:UI] GR Meter Header Readout
-        constexpr float kHeaderInsetPx     = 4.0f;
-        constexpr float kHeaderHPx         = 14.0f;
         constexpr float kHeaderFontPx      = 11.0f;
-        constexpr float kHeaderTitleAlpha  = 0.35f;
+        constexpr float kHeaderTitleAlpha  = 0.40f;
         constexpr float kHeaderValueAlpha  = 0.65f;
 
-        auto header = ledArea.reduced (kHeaderInsetPx, kHeaderInsetPx);
-        header.setHeight (kHeaderHPx);
+        constexpr int kHeaderTextXPx = 4;
+        constexpr int kHeaderTextYPx = 2;
 
-        const float halfW = header.getWidth() * 0.5f;
-        auto left  = header.withWidth (halfW);
-        auto right = header.withX (header.getX() + halfW).withWidth (header.getWidth() - halfW);
+        const auto hb = headerArea.toNearestInt();
+        const int halfW = hb.getWidth() / 2;
+
+        const juce::Rectangle<int> left  (hb.getX() + kHeaderTextXPx,
+                                          hb.getY() + kHeaderTextYPx,
+                                          juce::jmax (0, halfW - kHeaderTextXPx),
+                                          juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
+
+        const juce::Rectangle<int> right (hb.getX() + halfW,
+                                          hb.getY() + kHeaderTextYPx,
+                                          juce::jmax (0, hb.getWidth() - halfW - kHeaderTextXPx),
+                                          juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
 
         g.setFont (juce::Font (juce::FontOptions (kHeaderFontPx)));
         g.setColour (juce::Colours::white.withAlpha (kHeaderTitleAlpha));
-        g.drawText ("GAIN REDUCTION", left.toNearestInt(), juce::Justification::left);
+        g.drawText ("GAIN REDUCTION", left, juce::Justification::left);
 
         const juce::String grText = juce::String (lastGrDb, 1) + " dB";
         g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), kHeaderFontPx, juce::Font::plain));
-        g.setColour (juce::Colours::white.withAlpha (kHeaderValueAlpha));
-        g.drawText (grText, right.toNearestInt(), juce::Justification::right);
+        g.setColour (juce::Colour (0xFFE6A532).withAlpha (kHeaderValueAlpha));
+        g.drawText (grText, right, juce::Justification::right);
+
+        //// [CC:UI] GR Meter Glass Gloss Reflection
+        constexpr float kGlossAlpha          = 0.06f;
+        constexpr float kGlossFracH          = 0.30f;
+
+        const auto cover = getLocalBounds().toFloat();
+        const float glossH = juce::jmax (2.0f, std::round (cover.getHeight() * kGlossFracH));
+        const auto gloss = cover.withHeight (glossH);
+
+        juce::ColourGradient glossG (juce::Colours::white.withAlpha (kGlossAlpha),
+                                     gloss.getCentreX(), gloss.getY(),
+                                     juce::Colours::transparentWhite,
+                                     gloss.getCentreX(), gloss.getBottom(),
+                                     false);
+        g.setGradientFill (glossG);
+        g.fillRoundedRectangle (cover, kWellRadiusPx);
     }
 
     void timerCallback() override
@@ -462,7 +536,6 @@ void CompassCompressorAudioProcessorEditor::paint(juce::Graphics &g)
             drawEtch(thresholdLabel.getBounds()); drawEtch(ratioLabel.getBounds()); drawEtch(attackLabel.getBounds());
             drawEtch(releaseLabel.getBounds());   drawEtch(mixKnob.getBounds().withY(mixKnob.getBottom() - 5).withHeight(20));   drawEtch(outputLabel.getBounds());
             
-            drawEtch(wellRect.withY(wellRect.getBottom() + 6).withHeight(20));
             
             // Title moved into GR meter component header readout
         });
