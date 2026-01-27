@@ -377,13 +377,21 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
 
     void timerCallback() override
     {
-        // Poll processor for GR
-        // Fix: Use the processor reference directly and repaint SELF, not just parent
-        float gr = processor.getGainReductionMeterDb();
-        pushValueDb(gr); // updates member var
-        repaint();       // repaints self
+        //// [CML:SAFE] Meter Reset When Suspended
+        if (processor.isSuspended())
+        {
+            pushValueDb (0.0f);
+            repaint();
 
-        // Trigger parent repaint to update manual text readouts
+            if (auto *parent = getParentComponent())
+                parent->repaint();
+            return;
+        }
+
+        float gr = processor.getGainReductionMeterDb();
+        pushValueDb (gr);
+        repaint();
+
         if (auto *parent = getParentComponent())
             parent->repaint();
     }

@@ -238,6 +238,13 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     }
 }
 
+void CompassCompressorAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    //// [CC:SAFE] Bypass GR Meter Reset
+    grMeterDb.store (0.0f, std::memory_order_relaxed);
+    juce::AudioProcessor::processBlockBypassed (buffer, midi);
+}
+
 bool CompassCompressorAudioProcessor::hasEditor() const { return true; }
 juce::AudioProcessorEditor* CompassCompressorAudioProcessor::createEditor()
 {

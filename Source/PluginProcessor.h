@@ -12,7 +12,8 @@ public:
     const juce::AudioProcessorValueTreeState& getAPVTS() const noexcept { return apvts; }
 
     // UI meter tap: negative dB (0..-60), thread-safe
-    float getGainReductionMeterDb() const noexcept { return grMeterDb.load(std::memory_order_relaxed); }
+    //// [CML:SAFE] GR Meter Read And Clear
+    float getGainReductionMeterDb() noexcept { return grMeterDb.exchange (0.0f, std::memory_order_relaxed); }
 
     CompassCompressorAudioProcessor();
     ~CompassCompressorAudioProcessor() override = default;
@@ -25,6 +26,7 @@ public:
    #endif
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
