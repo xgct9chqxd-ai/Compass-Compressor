@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <random>
 #include <functional>
+#include <cmath>
 
 //==============================================================================
 // HELPER: Sets up a rotary slider with "Stealth" text box
@@ -12,6 +13,9 @@ static void setRotary(juce::Slider &s)
 
     //// [CML:UI] Rotary TextBox Visible Styling
     s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 80, 24);
+    
+    // [FIX] Correct argument order: (enabled, value)
+    s.setDoubleClickReturnValue(true, s.getValue());
 
     s.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white.withAlpha(0.7f));
     s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
@@ -131,8 +135,6 @@ struct CompassCompressorAudioProcessorEditor::CompassKnobLookAndFeel : public ju
                           float pos, float startAngle, float endAngle,
                           juce::Slider &slider) override
     {
-        juce::ignoreUnused(slider);
-
         const int sizeKey = (width << 16) | height;
         auto &bgImage = knobCache[sizeKey];
 
@@ -212,13 +214,48 @@ struct CompassCompressorAudioProcessorEditor::CompassKnobLookAndFeel : public ju
         float faceR = bodyR * 0.9f;
         float angle = startAngle + pos * (endAngle - startAngle);
 
+        // ===== Compass Active-Amount (0..1) from deviation to neutral =====
+        // If an editor supplies a shared group amount via properties, prefer it.
+        float bandAmt = (float) slider.getProperties().getWithDefault("bandAmt", -1.0f);
+
+        if (bandAmt < 0.0f)
+        {
+            const double def = slider.getDoubleClickReturnValue();
+            const double v   = slider.getValue();
+            const double dev = std::abs(v - def);
+
+            const auto range = slider.getRange();
+            const double start = range.getStart();
+            const double end   = range.getEnd();
+            const double maxDev = std::max(std::abs(def - start), std::abs(end - def));
+
+            bandAmt = (maxDev > 0.0) ? (float) juce::jlimit(0.0, 1.0, dev / maxDev) : 0.0f;
+        }
+        else
+        {
+            bandAmt = juce::jlimit(0.0f, 1.0f, bandAmt);
+        }
+
+        const bool bandActive = bandAmt > 1.0e-6f;
+
+        // Active ring: scales with bandAmt (tuned to match the bypass “ON” vibe at full)
+        if (bandActive)
+        {
+            const float alpha = 0.06f + 0.34f * bandAmt; // 0.06..0.40
+            const float thick = 2.4f  + 1.8f  * bandAmt; // 2.4..4.2
+
+            g.setColour(juce::Colour(0xFFE6A532).withAlpha(alpha));
+            g.drawEllipse(center.x - bodyR, center.y - bodyR, bodyR * 2.0f, bodyR * 2.0f, thick);
+        }
+
         juce::Path p;
         const float ptrW = 3.5f;
         const float ptrLen = faceR * 0.6f;
         p.addRoundedRectangle(-ptrW * 0.5f, -faceR + 6.0f, ptrW, ptrLen, 1.0f);
 
         auto xf = juce::AffineTransform::rotation(angle).translated(center);
-        g.setColour(juce::Colours::white.withAlpha(0.9f));
+        const float ptrAlpha = 0.90f + 0.10f * bandAmt;
+        g.setColour(juce::Colours::white.withAlpha(ptrAlpha));
         g.fillPath(p, xf);
     }
 };
@@ -244,8 +281,8 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         constexpr float kLitAlpha          = 0.52f;
         constexpr float kUnlitAlpha        = 0.06f;
 
-        //// [CC:UI] GR Meter Screen Background
-        g.fillAll (juce::Colour (0xFF050505));
+        //// [CC:UI] GR Meter Screen Background (transparent over parent well)
+        g.fillAll (juce::Colours::black.withAlpha (0.3f));
 
         //// [CC:UI] GR Meter Header Zone Reserve
         const float headerHeight = 20.0f;
@@ -274,19 +311,19 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
 
             const auto topSh = glassWell.withHeight (shH);
             juce::ColourGradient topG (juce::Colours::black.withAlpha (kInnerShadowTopA),
-                                       topSh.getCentreX(), topSh.getY(),
-                                       juce::Colours::transparentBlack,
-                                       topSh.getCentreX(), topSh.getBottom(),
-                                       false);
+                                     topSh.getCentreX(), topSh.getY(),
+                                     juce::Colours::transparentBlack,
+                                     topSh.getCentreX(), topSh.getBottom(),
+                                     false);
             g.setGradientFill (topG);
             g.fillRect (topSh);
 
             const auto botSh = glassWell.withY (glassWell.getBottom() - shH).withHeight (shH);
             juce::ColourGradient botG (juce::Colours::transparentBlack,
-                                       botSh.getCentreX(), botSh.getY(),
-                                       juce::Colours::black.withAlpha (kInnerShadowBotA),
-                                       botSh.getCentreX(), botSh.getBottom(),
-                                       false);
+                                     botSh.getCentreX(), botSh.getY(),
+                                     juce::Colours::black.withAlpha (kInnerShadowBotA),
+                                     botSh.getCentreX(), botSh.getBottom(),
+                                     false);
             g.setGradientFill (botG);
             g.fillRect (botSh);
 
@@ -340,21 +377,21 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         const int halfW = hb.getWidth() / 2;
 
         const juce::Rectangle<int> left  (hb.getX() + kHeaderTextXPx,
-                                          hb.getY() + kHeaderTextYPx,
-                                          juce::jmax (0, halfW - kHeaderTextXPx),
-                                          juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
+                                      hb.getY() + kHeaderTextYPx,
+                                      juce::jmax (0, halfW - kHeaderTextXPx),
+                                      juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
 
         const juce::Rectangle<int> right (hb.getX() + halfW,
-                                          hb.getY() + kHeaderTextYPx,
-                                          juce::jmax (0, hb.getWidth() - halfW - kHeaderTextXPx),
-                                          juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
+                                      hb.getY() + kHeaderTextYPx,
+                                      juce::jmax (0, hb.getWidth() - halfW - kHeaderTextXPx),
+                                      juce::jmax (0, hb.getHeight() - kHeaderTextYPx));
 
         g.setFont (juce::Font (juce::FontOptions (kHeaderFontPx)));
         g.setColour (juce::Colours::white.withAlpha (kHeaderTitleAlpha));
         g.drawText ("GAIN REDUCTION", left, juce::Justification::left);
 
         const juce::String grText = juce::String (lastGrDb, 1) + " dB";
-        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), kHeaderFontPx, juce::Font::plain));
+        g.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), kHeaderFontPx, juce::Font::plain)));
         g.setColour (juce::Colour (0xFFE6A532).withAlpha (kHeaderValueAlpha));
         g.drawText (grText, right, juce::Justification::right);
 
@@ -367,10 +404,10 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         const auto gloss = cover.withHeight (glossH);
 
         juce::ColourGradient glossG (juce::Colours::white.withAlpha (kGlossAlpha),
-                                     gloss.getCentreX(), gloss.getY(),
-                                     juce::Colours::transparentWhite,
-                                     gloss.getCentreX(), gloss.getBottom(),
-                                     false);
+                                   gloss.getCentreX(), gloss.getY(),
+                                   juce::Colours::transparentWhite,
+                                   gloss.getCentreX(), gloss.getBottom(),
+                                   false);
         g.setGradientFill (glossG);
         g.fillRoundedRectangle (cover, kWellRadiusPx);
     }
@@ -382,18 +419,12 @@ struct CompassCompressorAudioProcessorEditor::GRMeterComponent final : public ju
         {
             pushValueDb (0.0f);
             repaint();
-
-            if (auto *parent = getParentComponent())
-                parent->repaint();
             return;
         }
 
         float gr = processor.getGainReductionMeterDb();
         pushValueDb (gr);
         repaint();
-
-        if (auto *parent = getParentComponent())
-            parent->repaint();
     }
 
     CompassCompressorAudioProcessor &processor;
@@ -410,18 +441,16 @@ CompassCompressorAudioProcessorEditor::CompassCompressorAudioProcessorEditor(Com
     setSize(840, 440);
     knobLnf = std::make_unique<CompassKnobLookAndFeel>();
 
+    // 1. Setup UI (Styles only - we apply formatting AFTER attachments now)
     auto setupKnob = [&](juce::Slider &s, const juce::String &name)
     {
         s.setName(name);
         setRotary(s);
-        // Added decimal places as per user instruction
-        s.setNumDecimalPlacesToDisplay(1);
+        // Note: We do NOT set suffix here, so that calling it later triggers a text update.
         s.setLookAndFeel(knobLnf.get());
-
+        
         // Trigger repaint on value change to update label text
-        s.onValueChange = [this]
-        { repaint(); };
-
+        s.onValueChange = [this] { repaint(); };
         addAndMakeVisible(s);
     };
 
@@ -436,8 +465,6 @@ CompassCompressorAudioProcessorEditor::CompassCompressorAudioProcessorEditor(Com
     autoMakeupToggleComp->setLookAndFeel(knobLnf.get());
     addAndMakeVisible(*autoMakeupToggleComp);
 
-    // [REMOVED] Old Style Labels (styleLabel) removed to avoid duplication
-
     grMeter = std::make_unique<GRMeterComponent>(processorRef);
     addAndMakeVisible(*grMeter);
 
@@ -445,15 +472,53 @@ CompassCompressorAudioProcessorEditor::CompassCompressorAudioProcessorEditor(Com
     grMeter->setVisible(true);
     autoMakeupToggleComp->setVisible(true);
 
+    // 2. Create Attachments (NOTE: This step normally resets ranges & decimal places)
     auto &vts = processorRef.getAPVTS();
     using APVTS = juce::AudioProcessorValueTreeState;
+    
     thresholdAttach = std::make_unique<APVTS::SliderAttachment>(vts, "threshold", thresholdKnob);
-    ratioAttach = std::make_unique<APVTS::SliderAttachment>(vts, "ratio", ratioKnob);
-    attackAttach = std::make_unique<APVTS::SliderAttachment>(vts, "attack", attackKnob);
-    releaseAttach = std::make_unique<APVTS::SliderAttachment>(vts, "release", releaseKnob);
-    mixAttach = std::make_unique<APVTS::SliderAttachment>(vts, "mix", mixKnob);
-    outputGainAttach = std::make_unique<APVTS::SliderAttachment>(vts, "output_gain", outputGainKnob);
-    autoMakeupAttach = std::make_unique<APVTS::ButtonAttachment>(vts, "auto_makeup", autoMakeupToggleComp->getButton());
+    ratioAttach     = std::make_unique<APVTS::SliderAttachment>(vts, "ratio", ratioKnob);
+    attackAttach    = std::make_unique<APVTS::SliderAttachment>(vts, "attack", attackKnob);
+    releaseAttach   = std::make_unique<APVTS::SliderAttachment>(vts, "release", releaseKnob);
+    mixAttach       = std::make_unique<APVTS::SliderAttachment>(vts, "mix", mixKnob);
+    outputGainAttach= std::make_unique<APVTS::SliderAttachment>(vts, "output_gain", outputGainKnob);
+    autoMakeupAttach= std::make_unique<APVTS::ButtonAttachment>(vts, "auto_makeup", autoMakeupToggleComp->getButton());
+
+    // 3. Enforce Custom Formatting (Post-Attachment override)
+    // We clear the textFromValueFunction so that Slider uses its internal formatter (setNumDecimalPlaces).
+    // This is more robust against "double suffix" issues than a custom lambda.
+    auto enforceFormat = [](juce::Slider& s, int decimals, juce::String suffix)
+    {
+        // [FIX] Clear any lambda possibly set by attachment
+        s.textFromValueFunction = nullptr;
+        // [FIX] Use native JUCE formatting for simple precision
+        s.setNumDecimalPlacesToDisplay(decimals);
+        // [FIX] Set suffix (Slider will auto-append this to the formatted number)
+        s.setTextValueSuffix(suffix);
+    };
+
+    enforceFormat(thresholdKnob, 1, " dB");
+    enforceFormat(ratioKnob,     1, ":1");
+    enforceFormat(attackKnob,    1, " ms");
+    enforceFormat(releaseKnob,   0, " ms"); // Integer look for release
+    enforceFormat(mixKnob,       0, " %");  // Integer look for mix
+    enforceFormat(outputGainKnob,1, " dB");
+
+    // 4. Set Double Click Defaults (Must also be post-attachment)
+    // [FIX] Argument order is (bool isEnabled, double valueToSet).
+    // Previous reversed order caused implicit cast of value->bool (true) and true->double (1.0).
+    // Also ensuring noModifiers is used to prevent accidental resets during fine-tuning (Shift).
+    thresholdKnob.setDoubleClickReturnValue(true, -18.0, juce::ModifierKeys::noModifiers);
+    ratioKnob.setDoubleClickReturnValue(true, 4.0, juce::ModifierKeys::noModifiers);
+    attackKnob.setDoubleClickReturnValue(true, 16.0, juce::ModifierKeys::noModifiers);
+    releaseKnob.setDoubleClickReturnValue(true, 100.0, juce::ModifierKeys::noModifiers);
+    mixKnob.setDoubleClickReturnValue(true, 100.0, juce::ModifierKeys::noModifiers);
+    outputGainKnob.setDoubleClickReturnValue(true, 0.0, juce::ModifierKeys::noModifiers);
+    
+    // Clean up props that might have been set by generic handlers
+    outputGainKnob.getProperties().remove("bandAmt");
+    outputGainKnob.getProperties().remove("bandActive");
+    outputGainKnob.repaint();
 
     //// [CC:UI] Force Initial Layout
     resized();
@@ -540,10 +605,10 @@ void CompassCompressorAudioProcessorEditor::paint(juce::Graphics &g)
                 gBuffer.reduceClipRegion (inner.toNearestInt());
 
                 juce::ColourGradient sh (juce::Colours::black.withAlpha (kInnerShadowTopA),
-                                         inner.getCentreX(), inner.getY(),
-                                         juce::Colours::black.withAlpha (kInnerShadowBotA),
-                                         inner.getCentreX(), inner.getBottom(),
-                                         false);
+                                     inner.getCentreX(), inner.getY(),
+                                     juce::Colours::black.withAlpha (kInnerShadowBotA),
+                                     inner.getCentreX(), inner.getBottom(),
+                                     false);
                 gBuffer.setGradientFill (sh);
                 gBuffer.fillRoundedRectangle (inner, juce::jmax (0.0f, kWellRadiusPx - kInnerInsetPx));
 
@@ -556,10 +621,10 @@ void CompassCompressorAudioProcessorEditor::paint(juce::Graphics &g)
                 glass.setHeight (glass.getHeight() * kGlassFrac);
 
                 juce::ColourGradient refl (juce::Colours::white.withAlpha (kGlassTopA),
-                                           glass.getCentreX(), glass.getY(),
-                                           juce::Colours::transparentWhite,
-                                           glass.getCentreX(), glass.getBottom(),
-                                           false);
+                                         glass.getCentreX(), glass.getY(),
+                                         juce::Colours::transparentWhite,
+                                         glass.getCentreX(), glass.getBottom(),
+                                         false);
                 gBuffer.setGradientFill (refl);
                 gBuffer.fillRoundedRectangle (glass, kWellRadiusPx);
             }
@@ -638,4 +703,9 @@ void CompassCompressorAudioProcessorEditor::resized()
 void CompassCompressorAudioProcessorEditor::mouseDown(const juce::MouseEvent &e)
 {
     juce::AudioProcessorEditor::mouseDown(e);
+}
+
+void CompassCompressorAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    juce::AudioProcessorEditor::mouseDoubleClick (e);
 }

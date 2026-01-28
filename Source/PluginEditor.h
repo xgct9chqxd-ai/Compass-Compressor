@@ -15,6 +15,7 @@ public:
 
 
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 private:
     CompassCompressorAudioProcessor& processorRef;
 

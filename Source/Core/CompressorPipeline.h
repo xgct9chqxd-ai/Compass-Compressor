@@ -37,6 +37,11 @@ struct CompressorPipeline
     double smoothedAttackNorm  =  0.0;
     double smoothedReleaseNormUser = 0.0;
 
+    // [FIX] Internal wiring smoothers (Moved from static locals to members)
+    double smoothedReleaseNormInternal = 0.0; // Was static smoothedReleaseNorm
+    double smoothedRatioBiasInternal   = 0.0; // Was static smoothedRatioBias
+    double tgAttackBias01Internal      = 0.0; // Was static tgAttackBias01
+
     void setControlTargets (double thresholdDb, double ratio, double attackMs, double releaseMs)
     {
         targetThresholdDb = (std::isfinite(thresholdDb) ? thresholdDb : -18.0);
@@ -56,22 +61,12 @@ struct CompressorPipeline
         // Phase 5: initialize parameter smoothers to current targets (history preserved across blocks)
         smoothedThresholdDb   = targetThresholdDb;
         smoothedRatio         = targetRatio;
-        // Map attack/release (ms) -> normalized [0..1] using sealed log mapping
-        auto msToNorm01 = [](double ms, double msMin, double msMax)
-        {
-            if (!std::isfinite(ms)) ms = msMin;
-            if (ms < msMin) ms = msMin;
-            if (ms > msMax) ms = msMax;
-            const double lo = std::log(msMin);
-            const double hi = std::log(msMax);
-            const double x  = (std::log(ms) - lo) / (hi - lo);
-            if (!std::isfinite(x)) return 0.0;
-            if (x < 0.0) return 0.0;
-            if (x > 1.0) return 1.0;
-            return x;
-        };
-        smoothedAttackNorm     = msToNorm01(targetAttackMs, 0.1, 100.0);
-        smoothedReleaseNormUser= msToNorm01(targetReleaseMs, 10.0, 1000.0);
+        smoothedAttackNorm      = msToNorm01(targetAttackMs, 0.1, 100.0);
+        smoothedReleaseNormUser = msToNorm01(targetReleaseMs, 10.0, 1000.0);
+        // [FIX] Reset internal smoothers
+        smoothedReleaseNormInternal = 0.0;
+        smoothedRatioBiasInternal   = 0.0;
+        tgAttackBias01Internal      = 0.0;
 
         detectorScratch.setSize (2, juce::jmax (1, maxBlockSize), false, false, true);
         detectorScratch.clear();
@@ -98,21 +93,11 @@ hybridEnvelopeEngine.prepare(sampleRate, maxBlockSize);
         // Phase 5: reset parameter smoothers to targets (no discontinuity)
         smoothedThresholdDb   = targetThresholdDb;
         smoothedRatio         = targetRatio;
-        auto msToNorm01 = [](double ms, double msMin, double msMax)
-        {
-            if (!std::isfinite(ms)) ms = msMin;
-            if (ms < msMin) ms = msMin;
-            if (ms > msMax) ms = msMax;
-            const double lo = std::log(msMin);
-            const double hi = std::log(msMax);
-            const double x  = (std::log(ms) - lo) / (hi - lo);
-            if (!std::isfinite(x)) return 0.0;
-            if (x < 0.0) return 0.0;
-            if (x > 1.0) return 1.0;
-            return x;
-        };
         smoothedAttackNorm      = msToNorm01(targetAttackMs, 0.1, 100.0);
         smoothedReleaseNormUser = msToNorm01(targetReleaseMs, 10.0, 1000.0);
+        smoothedReleaseNormInternal = 0.0;
+        smoothedRatioBiasInternal   = 0.0;
+        tgAttackBias01Internal      = 0.0;
         inputConditioning.reset();
         detectorSplit.reset();
         detectorCore.reset();
@@ -219,19 +204,6 @@ hybridEnvelopeEngine.reset();
             if (x > 1.0) return 1.0;
             return x;
         };
-        auto msToNorm01 = [](double ms, double msMin, double msMax)
-        {
-            if (!std::isfinite(ms)) ms = msMin;
-            if (ms < msMin) ms = msMin;
-            if (ms > msMax) ms = msMax;
-            const double lo = std::log(msMin);
-            const double hi = std::log(msMax);
-            const double x  = (std::log(ms) - lo) / (hi - lo);
-            if (!std::isfinite(x)) return 0.0;
-            if (x < 0.0) return 0.0;
-            if (x > 1.0) return 1.0;
-            return x;
-        };
 
         // Targets (sanitized)
         const double thrT  = juce::jlimit(-60.0, 0.0, (std::isfinite(targetThresholdDb) ? targetThresholdDb : -18.0));
@@ -289,7 +261,6 @@ lowEndGuard.setCurrentRatio(userRatio);
 
         // Phase 4E.6 — Apply LowEndGuard releaseAdjustmentFactor into existing release control lane
         // Compute final effective release ms, then map back to normalized release lane (no new params/UI)
-        static double smoothedReleaseNorm = 0.0;
         {
             const double baseEffMs = dualStageRelease.getEffectiveReleaseMs();
             const double leFactor  = lowEndGuard.getReleaseAdjustmentFactor();
@@ -347,17 +318,16 @@ lowEndGuard.setCurrentRatio(userRatio);
             // Smooth normalized release to avoid abrupt changes (τ = 10 ms)
             const double tau = 0.010;
             const double a = std::exp(-(double)n_local / (tau * sr_local));
-            smoothedReleaseNorm = a * smoothedReleaseNorm + (1.0 - a) * targetR;
+            smoothedReleaseNormInternal = a * smoothedReleaseNormInternal + (1.0 - a) * targetR;
         }
 // Phase 4B.2 — Ratio Softening (control wiring only; no parameters/UI)
         // Smooth ratioBias (τ = 10 ms) then apply additively to injected userRatio.
-        static double smoothedRatioBias = 0.0;
         const double targetRatioBias = lowEndGuard.getRatioBias();
-const double tau = 0.010; // 10 ms
+        const double tau = 0.010; // 10 ms
         const double a = std::exp(-(double)n_local / (tau * sr_local));
-        smoothedRatioBias = a * smoothedRatioBias + (1.0 - a) * targetRatioBias;
+        smoothedRatioBiasInternal = a * smoothedRatioBiasInternal + (1.0 - a) * targetRatioBias;
 
-        double effectiveRatio = userRatio + smoothedRatioBias;
+        double effectiveRatio = userRatio + smoothedRatioBiasInternal;
         if (!std::isfinite(effectiveRatio) || effectiveRatio < 1.5)
             effectiveRatio = 1.5;
 
@@ -368,9 +338,8 @@ const double tau = 0.010; // 10 ms
 
         // Wire detector outputs into hybrid engine (Phase 2 plumbing only)
         hybridEnvelopeEngine.setDetectorLinear(detectorCore.getDetectorLinear());
-                // Phase 4D.2A — TransientGuard wiring (attackBias01 -> next-block attack bias)
+        // Phase 4D.2A — TransientGuard wiring (attackBias01 -> next-block attack bias)
         // NOTE: attackBias01 is computed later in the block (after gainComputer), so we apply it next block.
-        static double tgAttackBias01 = 0.0;
         auto clamp01_tg = [](double x)
         {
             if (x < 0.0) return 0.0;
@@ -379,10 +348,10 @@ const double tau = 0.010; // 10 ms
         };
         constexpr double kTgAttackBiasK = 0.25; // sealed
         const double A0 = detectorCore.getAttackNormalized();
-        const double Ab = clamp01_tg(A0 + kTgAttackBiasK * clamp01_local(tgAttackBias01));
+        const double Ab = clamp01_tg(A0 + kTgAttackBiasK * clamp01_local(tgAttackBias01Internal));
         hybridEnvelopeEngine.setAttackNormalized(Ab);
 
-        hybridEnvelopeEngine.setReleaseNormalized(smoothedReleaseNorm);
+        hybridEnvelopeEngine.setReleaseNormalized(smoothedReleaseNormInternal);
         hybridEnvelopeEngine.setCrestNormalized(detectorCore.getCrestNormalized());
         hybridEnvelopeEngine.process(detView);
 
@@ -397,7 +366,7 @@ const double tau = 0.010; // 10 ms
         transientGuard.setGainReductionDb(gainComputer.getGainReductionDb());
         transientGuard.process(detView); // no-op stub (Phase 4 plumbing)
         // Phase 4D.2A — latch computed TransientGuard output for next block’s envelope wiring
-        tgAttackBias01 = transientGuard.getAttackBias01();
+        tgAttackBias01Internal = transientGuard.getAttackBias01();
 
         // 9.5 Stereo Link control (Phase 3 plumbing only)
         stereoLink.setGainReductionDbIn(gainComputer.getGainReductionDb());
@@ -482,6 +451,20 @@ const double tau = 0.010; // 10 ms
         oversamplingAndSafety.process(main);
     }
 
+
+private:
+    static double msToNorm01(double ms, double msMin, double msMax)
+    {
+        if (!std::isfinite(ms)) ms = msMin;
+        if (ms < msMin) ms = msMin;
+        if (ms > msMax) ms = msMax;
+        const double lo = std::log(msMin);
+        const double hi = std::log(msMax);
+        const double x  = (std::log(ms) - lo) / (hi - lo);
+        return juce::jlimit(0.0, 1.0, x);
+    }
+
+public:
     juce::AudioBuffer<float> detectorScratch;
 
     InputConditioning      inputConditioning;

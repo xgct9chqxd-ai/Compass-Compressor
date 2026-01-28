@@ -14,7 +14,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout CompassCompressorAudioProces
     ratioRange.setSkewForCentre (4.0f);
 
     auto attackRange = juce::NormalisableRange<float> (0.1f, 100.0f, 0.001f);
-    attackRange.setSkewForCentre (10.0f);
+    attackRange.setSkewForCentre (16.0f);
 
     auto releaseRange = juce::NormalisableRange<float> (10.0f, 1000.0f, 0.01f);
     releaseRange.setSkewForCentre (100.0f);
@@ -25,7 +25,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout CompassCompressorAudioProces
 
     layout.add (std::make_unique<juce::AudioParameterFloat> ("threshold",    "Threshold",   thresholdRange, -18.0f));
     layout.add (std::make_unique<juce::AudioParameterFloat> ("ratio",        "Ratio",       ratioRange,      4.0f));
-    layout.add (std::make_unique<juce::AudioParameterFloat> ("attack",       "Attack",      attackRange,    10.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("attack",       "Attack",      attackRange,    16.0f));
     layout.add (std::make_unique<juce::AudioParameterFloat> ("release",      "Release",     releaseRange,  100.0f));
     layout.add (std::make_unique<juce::AudioParameterFloat> ("mix",          "Mix",         mixRange,     100.0f));
     layout.add (std::make_unique<juce::AudioParameterFloat> ("output_gain",  "Output Gain", outGainRange,   0.0f));
@@ -209,10 +209,17 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
         makeupDb = juce::jlimit(0.0f, 12.0f, 0.12f * thrPos * (0.35f + 0.65f * rNorm));
     }
 
-    const float totalOutDb = outGainDb + makeupDb;
-    const float outLin = juce::Decibels::decibelsToGain(totalOutDb);
+    //// [CML:DSP] Makeup Pre-Mix, Output Post-Mix Routing
+    constexpr float kMakeupApplyThresholdDb = 0.01f;
 
-    // Apply Mix + Output gain sample-accurate (no allocations)
+    const float makeupLin = juce::Decibels::decibelsToGain (makeupDb);
+    const float outputLin = juce::Decibels::decibelsToGain (outGainDb);
+
+    // Apply Auto-Makeup to the WET signal (mainAudio) before the mix stage.
+    if (makeupDb > kMakeupApplyThresholdDb)
+        mainAudio.applyGain (makeupLin);
+
+    // Apply Mix + Master Output gain sample-accurate (no allocations)
     const int chs = mainAudio.getNumChannels();
     const int nSamp = mainAudio.getNumSamples();
 
@@ -220,20 +227,20 @@ void CompassCompressorAudioProcessor::processBlock (juce::AudioBuffer<float>& bu
     // If dry couldn't be captured safely (no allocations), fail-soft to fully-wet.
     if (mix01 >= 0.999f || ! dryValid)
     {
-        mainAudio.applyGain(outLin);
+        mainAudio.applyGain (outputLin);
         return;
     }
 
     for (int ch = 0; ch < chs; ++ch)
     {
-        float* w = mainAudio.getWritePointer(ch);
-        const float* d = dryBuffer.getReadPointer(ch);
+        float* w = mainAudio.getWritePointer (ch);
+        const float* d = dryBuffer.getReadPointer (ch);
         for (int i = 0; i < nSamp; ++i)
         {
-            const float wet = w[i];
+            const float wet = w[i]; // Includes Auto-Makeup
             const float dry = d[i];
             const float x = dry + mix01 * (wet - dry);
-            w[i] = x * outLin;
+            w[i] = x * outputLin;
         }
     }
 }
@@ -251,8 +258,22 @@ juce::AudioProcessorEditor* CompassCompressorAudioProcessor::createEditor()
     return new CompassCompressorAudioProcessorEditor (*this);
 }
 
-void CompassCompressorAudioProcessor::getStateInformation (juce::MemoryBlock&) {}
-void CompassCompressorAudioProcessor::setStateInformation (const void*, int) {}
+void CompassCompressorAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    // Serializes the parameters to XML, then to binary
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void CompassCompressorAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    // Restores the parameters from binary
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState.get() != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
 
 // This factory must exist for AU/VST3 builds
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
